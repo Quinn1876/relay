@@ -128,10 +128,28 @@ pub mod tcp_server {
         Unknown
     }
 
+    /**
+     * @func run
+     * @param config: Configuration settings for the program
+     *
+     * @brief: This is the main loop for the relay board server
+     * It binds to a TCP socket and begins listening for requests
+     * from the Controller. The Controller can cause the relay board to
+     * enter different states depending on the Query which it sends
+     * This protocol was designed to be expandable so that the controller
+     * can be used to activate something like a test run or cause other functions
+     * to be called on the relay board.
+     */
     pub fn run<A: std::net::ToSocketAddrs>(config: Config<A>) -> std::io::Result<()> {
         let listener = TcpListener::bind(config.address)?;
         println!("Listening on {}", listener.local_addr().ok().unwrap());
 
+        /*
+        * Add Supported TCP Queries here
+        * Each Query string will correspond to a RequestType
+        * Each Request Type will have a corresponding handler function which is ran
+        * when the match occurs
+        */
         let mut request_parser: requests::RequestParser::<&RequestTypes> = requests::RequestParser::new();
         request_parser.insert("HANDSHAKE\r\n", &RequestTypes::Handshake);
         request_parser.insert("@@Failed@@\r\n", &RequestTypes::Unknown);
@@ -140,11 +158,12 @@ pub mod tcp_server {
         for stream in listener.incoming() {
             match stream {
                 Ok(mut stream) => {
+                    // Get Information about the incoming Socket
                     let incoming_socket = stream.peer_addr().unwrap();
                     println!("{} Connected", incoming_socket);
-                    let incoming_addr = incoming_socket.ip();
+                    let request = super::stream_utils::read_all(&mut stream, config.buffer_size).unwrap_or(b"@@Failed@@\r\n".to_vec());
 
-                    let request = super::stream_utils::read_all(&mut stream, config.buffer_size)?;
+                    /* Remove the Query String from the request and match it to the associated handler function */
                     match request_parser.strip_line_and_get_value(request.as_slice()) {
                         requests::RequestParserResult::Success((&value, request)) => {
                             match value {
@@ -152,17 +171,20 @@ pub mod tcp_server {
                                     println!("HandShake received");
                                     handle_handshake(request, &mut stream).unwrap();
                                 },
+                                RequestTypes::Unknown => {
+                                    println!("Received a Malformed Input");
+                                }
                                 _ => ()
                             }
                         },
                         requests::RequestParserResult::InvalidRequest => {
-                            println!("Invalid Request Recieved");
+                            println!("Invalid Request Received");
                         },
                         _ => ()
                     };
 
-                    let response = "aaaa\r\n\r\n";
-                    stream.write(response.as_bytes())?;
+                    /* Close the TCP Connection Respectfully*/
+                    stream.write(b"END\r\n")?;
                     ()
                 }
                 Err(err) => {
@@ -173,26 +195,35 @@ pub mod tcp_server {
         Ok(())
     }
 
-    fn handle_handshake(request: &[u8], stream: &mut TcpStream) -> std::io::Result<()> {
-        let desktop = "DESKTOP\r\n";
-        let request = &request[0..desktop.len()];
-        let request = String::from_utf8(request.to_vec()).unwrap();
-        println!("{} {} {}", request, desktop, request == desktop);
+    /**
+     * @func handle_handshake
+     * @param _request: This is the body of the request
+     * @param stream: Tcp stream, can be written to and read from
+     *
+     * @brief: This is the main function for running the POD
+     * A UDP port is bound and watched for information coming from the
+     * controller
+     * Once opened, the controller is notified of the port to begin sending to
+     * over the tcp stream.
+     *
+     * TODO: Interface with the Can Board to retrieve CAN Packets to send to the controller
+     * TODO: Interface with the CAN Board to send CAN packets with information from the controller
+     */
+    fn handle_handshake(_request: &[u8], stream: &mut TcpStream) -> std::io::Result<()> {
 
-        if request == desktop {
-            let mut addr = stream.local_addr()?;
-            addr.set_port(8888);
-            let mut udp_socket = UdpSocket::bind(addr)?;
-            println!("Bound to udpSocket {}", addr);
-            stream.write(b"8888")?;
+        let mut addr = stream.local_addr()?;
+        addr.set_port(8888);
+        let udp_socket = UdpSocket::bind(addr)?;
+        println!("Bound to udpSocket {}", addr);
+        stream.write(b"8888")?; // Tell the Handshake requester what port to listen on
 
-            let mut buffer = [0u8; 256];
+        let mut buffer = [0u8; 256];
 
-            let (amount, src) = udp_socket.recv_from(&mut buffer)?;
+        let (amount, src) = udp_socket.recv_from(&mut buffer)?;
 
-            println!("UDP Packet: {}", String::from_utf8(buffer.to_vec()).unwrap());
+        /* Do Something Usefull Here with the UDP packet */
+        println!("UDP Packet: {}", String::from_utf8(buffer.to_vec()).unwrap());
 
-        }
         Ok(())
     }
 }

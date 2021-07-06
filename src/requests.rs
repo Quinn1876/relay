@@ -298,6 +298,9 @@ impl <T> RequestParser<T> {
      * @param value: T
      *
      * Insert value at key. Overwrites previous insertions if there was one
+     *
+     * @NOTE When constructing the request parser, the most often used commands should be the first ones inserted,
+     * this will reduce the time that it takes to parse the most often used commands
      */
     pub fn insert<'a>(&mut self, key: &'a str, value: T) -> RequestParserResult<()> {
         let key = key.as_bytes();
