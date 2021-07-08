@@ -125,7 +125,8 @@ pub mod tcp_server {
 
     enum RequestTypes {
         Handshake,
-        Unknown
+        Unknown,
+        MockCAN
     }
 
     /**
@@ -152,6 +153,7 @@ pub mod tcp_server {
         */
         let mut request_parser: requests::RequestParser::<&RequestTypes> = requests::RequestParser::new();
         request_parser.insert("HANDSHAKE\r\n", &RequestTypes::Handshake);
+        request_parser.insert("SEND MOCK CAN\r\n", &RequestTypes::MockCAN);
         request_parser.insert("@@Failed@@\r\n", &RequestTypes::Unknown);
         let request_parser = request_parser;
 
@@ -170,6 +172,10 @@ pub mod tcp_server {
                                 RequestTypes::Handshake => {
                                     println!("HandShake received");
                                     handle_handshake(request, &mut stream).unwrap();
+                                },
+                                RequestTypes::MockCAN => {
+                                    println!("Send Mock Can Received");
+                                    handle_mock_can(request, &mut stream).unwrap();
                                 },
                                 RequestTypes::Unknown => {
                                     println!("Received a Malformed Input");
@@ -223,6 +229,25 @@ pub mod tcp_server {
 
         /* Do Something Usefull Here with the UDP packet */
         println!("UDP Packet: {}", String::from_utf8(buffer.to_vec()).unwrap());
+
+        Ok(())
+    }
+
+    fn handle_mock_can(_request: &[u8], stream: &mut TcpStream) -> std::io::Result<()> {
+        let mut addr = stream.local_addr()?;
+        addr.set_port(8888);
+        let udp_socket = UdpSocket::bind(addr)?;
+        println!("Bound to udpSocket {}", addr);
+        stream.write(b"8888")?; // Tell the Handshake requester what port to listen on
+
+        let mut buffer = [0u8; 256];
+
+        let (_amount, src) = udp_socket.recv_from(&mut buffer)?;
+
+        for _i in 0..7 {
+            let buf = [b'B', b'M', b'S', b'1', b'\r', b'\n', 100u8];
+            udp_socket.send_to(&buf, src)?;
+        }
 
         Ok(())
     }
