@@ -1,5 +1,6 @@
 mod stream_utils;
 mod requests;
+mod i2c;
 
 pub mod tcp_server {
     use super::requests;
