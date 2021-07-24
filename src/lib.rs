@@ -229,8 +229,8 @@ pub mod tcp_server {
         let (amount, src) = udp_socket.recv_from(&mut buffer)?;
 
         /* Do Something Usefull Here with the UDP packet */
-        /* Read and write the UDP packet to and from I2C */
-        let i2c.write_read(&self, write_buffer: &[u8], read_buffer: &mut [u8])
+        /* Writes buffer to the slave and fills the buffer with incoming data from the UDP packet */
+        i2c.write_read(addr, write_buffer: &[u8], read_buffer: &mut [u8]) //write_read will read the max bytes as can fit in the buffer; 8192
 
         println!("UDP Packet: {}", String::from_utf8(buffer.to_vec()).unwrap());
 
