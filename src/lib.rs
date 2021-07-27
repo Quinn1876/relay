@@ -230,7 +230,7 @@ pub mod tcp_server {
 
         /* Do Something Usefull Here with the UDP packet */
         /* Writes buffer to the slave and fills the buffer with incoming data from the UDP packet */
-        i2c.write_read(addr, write_buffer: &[u8], read_buffer: &mut [u8]) //write_read will read the max bytes as can fit in the buffer; 8192
+        i2c::write_read(addr, write_buffer: &[u8], read_buffer: &mut [u8]) //write_read will read the max bytes as can fit in the buffer; 8192
 
         println!("UDP Packet: {}", String::from_utf8(buffer.to_vec()).unwrap());
 
