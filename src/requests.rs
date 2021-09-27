@@ -1,3 +1,9 @@
+/**
+ * The Requests Module's main export is the
+ * RequestParser which is an implimentaiton of
+ * a Radix tree used to index string queries/requests
+ */
+
 #[cfg(test)]
 mod test {
     use super::*;

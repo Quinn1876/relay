@@ -7,3 +7,4 @@ edition = "2018"
 
 [dependencies]
 socketcan = "1.7.0"
+polling = "2.1.0"
