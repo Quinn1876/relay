@@ -129,6 +129,7 @@ impl Config<SocketAddr> {
     }
 }
 
+#[derive(Copy, Clone)]
 enum RequestTypes {
     Handshake,
     Unknown,
@@ -245,7 +246,7 @@ struct Server<A: std::net::ToSocketAddrs> {
     socket_poller: Poller,                      // Socket poller is our interface to listen to the os to tell us when io (sockets) are ready
     current_state: ServerState,
     config: Config<A>,
-    request_parser: requests::RequestParser::<&RequestTypes>
+    request_parser: requests::RequestParser::<RequestTypes>
 }
 
 impl<A: std::net::ToSocketAddrs> Server<A> {
@@ -281,21 +282,17 @@ impl<A: std::net::ToSocketAddrs> Server<A> {
 
         self.poll_tcp_socket(PollType::Add)?;
 
-        let mut tcp_stream: Option<TcpStream> = None;
-        let mut udp_socket: Option<UdpSocket> = None;
-        let mut can_socket: Option<CANSocket> = None;
-
         let mut events = Vec::new();
         loop {
             events.clear();
             self.poller_wait(&mut events, None)?;
 
             for event in &events {
-                if event.key == tcp_socket_key {
+                if event.key == self.keys.tcp_socket {
 
-                } else if event.key == udp_key {
+                } else if event.key == self.keys.udp_socket {
 
-                } else if event.key == can_key {
+                } else if event.key == self.keys.can_socket {
 
                 }
             }
@@ -303,36 +300,44 @@ impl<A: std::net::ToSocketAddrs> Server<A> {
 
     }
 
+    /**
+     * poll_*_socket
+     * There are two values for these functions, either add or modify.
+     * The first time the user would like to begin polling, the socket must be "added"
+     * After each event received, the socket ust be repolled with a "Modify" call
+     */
+    // START poll_*_socket functions
     fn poll_tcp_socket(&self, pollType: PollType) -> Result<(), Error> {
         match pollType {
-            PollType::Add => self.socket_poller.add(&self.tcp_socket.unwrap(), Event::readable(self.keys.tcp_socket)).map_err(|e| Error::PollerError(e)),
-            PollType::Modify => self.socket_poller.modify(&self.tcp_socket.unwrap(), Event::readable(self.keys.tcp_socket)).map_err(|e| Error::PollerError(e))
+            PollType::Add => self.socket_poller.add(self.tcp_socket.as_ref().unwrap(), Event::readable(self.keys.tcp_socket)).map_err(|e| Error::PollerError(e)),
+            PollType::Modify => self.socket_poller.modify(self.tcp_socket.as_ref().unwrap(), Event::readable(self.keys.tcp_socket)).map_err(|e| Error::PollerError(e))
         }
     }
 
     fn poll_udp_socket(&self, pollType: PollType) -> Result<(), Error> {
         match pollType {
-            PollType::Add => self.socket_poller.add(&self.udp_socket.unwrap(), Event::readable(self.keys.udp_socket)).map_err(|e| Error::PollerError(e)),
-            PollType::Modify => self.socket_poller.modify(&self.udp_socket.unwrap(), Event::readable(self.keys.udp_socket)).map_err(|e| Error::PollerError(e))
+            PollType::Add => self.socket_poller.add(self.udp_socket.as_ref().unwrap(), Event::readable(self.keys.udp_socket)).map_err(|e| Error::PollerError(e)),
+            PollType::Modify => self.socket_poller.modify(self.udp_socket.as_ref().unwrap(), Event::readable(self.keys.udp_socket)).map_err(|e| Error::PollerError(e))
         }
     }
 
     fn poll_can_socket(&self, pollType: PollType) -> Result<(), Error> {
         match pollType {
-            PollType::Add => self.socket_poller.add(&self.can_socket.unwrap(), Event::readable(self.keys.can_socket)).map_err(|e| Error::PollerError(e)),
-            PollType::Modify => self.socket_poller.modify(&self.can_socket.unwrap(), Event::readable(self.keys.can_socket)).map_err(|e| Error::PollerError(e))
+            PollType::Add => self.socket_poller.add(self.can_socket.as_ref().unwrap(), Event::readable(self.keys.can_socket)).map_err(|e| Error::PollerError(e)),
+            PollType::Modify => self.socket_poller.modify(self.can_socket.as_ref().unwrap(), Event::readable(self.keys.can_socket)).map_err(|e| Error::PollerError(e))
         }
     }
+    // END OF poll_*_socket functions
 
 
     fn poller_wait(&self, events: &mut Vec<Event>, timeout: Option<Duration>) -> Result<usize, Error> {
-        self.socket_poller.wait(&mut events, timeout).map_err(|e| Error::PollerError(e))
+        self.socket_poller.wait(events, timeout).map_err(|e| Error::PollerError(e))
     }
 
     fn initialize_tcp_socket(&mut self) -> Result<(), Error> {
-        self.tcp_socket = Some(TcpListener::bind(self.config.address).map_err(|e| Error::TcpSocketError(e))?);
-        self.tcp_socket.unwrap().set_nonblocking(true).map_err(|e| Error::TcpSocketError(e))?;
-        println!("Listening on {}", self.tcp_socket.unwrap().local_addr().ok().unwrap());
+        self.tcp_socket = Some(TcpListener::bind(&self.config.address).map_err(|e| Error::TcpSocketError(e))?);
+        self.tcp_socket.as_ref().unwrap().set_nonblocking(true).map_err(|e| Error::TcpSocketError(e))?; // TCP Socket neesd to be non_blocking so that it can be polled
+        println!("Listening on {}", self.tcp_socket.as_ref().unwrap().local_addr().ok().unwrap());
         Ok(())
     }
 
@@ -343,62 +348,66 @@ impl<A: std::net::ToSocketAddrs> Server<A> {
         * Each Request Type will have a corresponding handler function which is ran
         * when the match occurs
         */
-        self.request_parser.insert("HANDSHAKE\r\n", &RequestTypes::Handshake);
-        self.request_parser.insert("SEND MOCK CAN\r\n", &RequestTypes::MockCAN);
-        self.request_parser.insert("@@Failed@@\r\n", &RequestTypes::Unknown); // Special Message which is written into the request in the event of an error reading the message
+        self.request_parser.insert("HANDSHAKE\r\n", RequestTypes::Handshake);
+        self.request_parser.insert("SEND MOCK CAN\r\n", RequestTypes::MockCAN);
+        self.request_parser.insert("@@Failed@@\r\n", RequestTypes::Unknown); // Special Message which is written into the request in the event of an error reading the message
     }
 
     fn open_udp_socket<Addr: std::net::ToSocketAddrs>(&mut self, addr: Addr) -> Result<(), Error> {
         self.udp_socket = Some(UdpSocket::bind(addr).map_err(|e| Error::UdpSocketError(e))?);
+        self.udp_socket.as_ref().unwrap().set_nonblocking(true).map_err(|e| Error::UdpSocketError(e))?;
         Ok(())
     }
 
     fn open_can_socket(&mut self) -> Result<(), Error> {
         self.can_socket = Some(can::open_socket(&self.config.can_config).map_err(|e| Error::CanSocketError(e))?);
+        self.can_socket.as_ref().unwrap().set_nonblocking(true).map_err(|e| Error::CanSocketError(can::Error::UnableToSetNonBlocking(e)))?;
         Ok(())
     }
 
-    fn handle_tcp_socket_event(&self, event: Event) -> Result<(), Error> {
-        match self.tcp_socket.unwrap().accept() {
-            Ok((mut stream, addr)) => {
-                println!("Connected to a new stream with addr: {}", addr);
-                let request = stream_utils::read_all(&mut stream, self.config.buffer_size).unwrap_or(b"@@Failed@@\r\n".to_vec());
+    fn handle_tcp_socket_event(&mut self, event: Event) -> Result<(), Error> {
+        if let Some(tcp_socket) = &self.tcp_socket {
+            match tcp_socket.accept() {
+                Ok((mut stream, addr)) => {
+                    println!("Connected to a new stream with addr: {}", addr);
+                    let request = stream_utils::read_all(&mut stream, self.config.buffer_size).unwrap_or(b"@@Failed@@\r\n".to_vec());
 
-                /* Remove the Query String from the request and match it to the associated handler function */
-                match self.request_parser.strip_line_and_get_value(request.as_slice()) {
-                    requests::RequestParserResult::Success((&value, request)) => {
-                        match value {
-                            RequestTypes::Handshake => {
-                                println!("HandShake received");
-                                let mut addr = stream.local_addr().map_err(|e| Error::UdpSocketError(e))?;
-                                addr.set_port(8888);
+                    /* Remove the Query String from the request and match it to the associated handler function */
+                    match self.request_parser.strip_line_and_get_value(request.as_slice()) {
+                        requests::RequestParserResult::Success((&value, request)) => {
+                            match value {
+                                RequestTypes::Handshake => {
+                                    println!("HandShake received");
+                                    let mut addr = stream.local_addr().map_err(|e| Error::UdpSocketError(e))?;
+                                    addr.set_port(8888);
 
-                                self.open_udp_socket(addr)?;
-                                self.open_can_socket()?;
+                                    self.open_udp_socket(addr)?;
+                                    self.open_can_socket()?;
 
-                                println!("Bound to udpSocket {}", addr);
-                                stream.write(b"8888").map_err(|e| Error::UdpSocketError(e))?; // Tell the Handshake requester what port to listen on
+                                    println!("Bound to udpSocket {}", addr);
+                                    stream.write(b"8888").map_err(|e| Error::UdpSocketError(e))?; // Tell the Handshake requester what port to listen on
 
-                                self.poll_udp_socket(PollType::Add);
-                                self.poll_can_socket(PollType::Add);
-                            },
-                            RequestTypes::MockCAN => {
-                                println!("Send Mock Can Received");
-                                handle_mock_can(request, &mut stream).unwrap();
-                            },
-                            RequestTypes::Unknown => {
-                                println!("Received a Malformed Input");
+                                    self.poll_udp_socket(PollType::Add);
+                                    self.poll_can_socket(PollType::Add);
+                                },
+                                RequestTypes::MockCAN => {
+                                    println!("Send Mock Can Received");
+                                    handle_mock_can(request, &mut stream).unwrap();
+                                },
+                                RequestTypes::Unknown => {
+                                    println!("Received a Malformed Input");
+                                }
+                                _ => ()
                             }
-                            _ => ()
-                        }
-                    },
-                    requests::RequestParserResult::InvalidRequest => {
-                        println!("Invalid Request Received");
-                    },
-                    _ => ()
-                };
-            },
-            Err(e) => return Err(Error::TcpSocketError(e))
+                        },
+                        requests::RequestParserResult::InvalidRequest => {
+                            println!("Invalid Request Received");
+                        },
+                        _ => ()
+                    };
+                },
+                Err(e) => return Err(Error::TcpSocketError(e))
+            }
         }
         Ok(())
     }
