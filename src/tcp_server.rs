@@ -1,6 +1,10 @@
 use polling::{ Event, Poller, Source };
 use socketcan::CANSocket;
 use std::time::Duration;
+use std::net::{ TcpListener, TcpStream, IpAddr, Ipv4Addr, SocketAddr, UdpSocket };
+use std::io::prelude::*;
+use std::sync::Arc;
+use json::object;
 
 use crate::requests;
 use crate::stream_utils;
@@ -47,9 +51,6 @@ mod test {
     }
 }
 
-
-use std::net::{ TcpListener, TcpStream, IpAddr, Ipv4Addr, SocketAddr, UdpSocket };
-use std::io::prelude::*;
 
 pub struct Config<A: std::net::ToSocketAddrs> {
     address: A,
@@ -136,79 +137,6 @@ enum RequestTypes {
     MockCAN
 }
 
-/**
- * @func run
- * @param config: Configuration settings for the program
- *
- * @brief: This is the main loop for the relay board server
- * It binds to a TCP socket and begins listening for requests
- * from the Controller. The Controller can cause the relay board to
- * enter different states depending on the Query which it sends
- * This protocol was designed to be expandable so that the controller
- * can be used to activate something like a test run or cause other functions
- * to be called on the relay board.
- */
-pub fn run<A: std::net::ToSocketAddrs>(config: Config<A>) -> std::io::Result<()> {
-    let listener = TcpListener::bind(config.address)?;
-    println!("Listening on {}", listener.local_addr().ok().unwrap());
-
-    /*
-    * Add Supported TCP Queries here
-    * Each Query string will correspond to a RequestType
-    * Each Request Type will have a corresponding handler function which is ran
-    * when the match occurs
-    */
-    let mut request_parser: requests::RequestParser::<&RequestTypes> = requests::RequestParser::new();
-    request_parser.insert("HANDSHAKE\r\n", &RequestTypes::Handshake);
-    request_parser.insert("SEND MOCK CAN\r\n", &RequestTypes::MockCAN);
-    request_parser.insert("@@Failed@@\r\n", &RequestTypes::Unknown); // Special Message which is written into the request in the event of an error reading the message
-    let request_parser = request_parser;
-
-    let mut streams: Vec<TcpStream> = Vec::new();
-    // TODO: GET This shit working - maybe move everything into one polling system and avoid threads :)
-    for stream in listener.incoming() {
-        match stream {
-            Ok(mut stream) => {
-                // Get Information about the incoming Socket
-                let incoming_socket = stream.peer_addr().unwrap();
-                println!("{} Connected", incoming_socket);
-                let request = stream_utils::read_all(&mut stream, config.buffer_size).unwrap_or(b"@@Failed@@\r\n".to_vec());
-                streams.push(stream);
-
-                /* Remove the Query String from the request and match it to the associated handler function */
-                match request_parser.strip_line_and_get_value(request.as_slice()) {
-                    requests::RequestParserResult::Success((&value, request)) => {
-                        match value {
-                            RequestTypes::Handshake => {
-                                println!("HandShake received");
-
-                                // handle_handshake(request, &mut stream, &config.can_config).unwrap();
-                            },
-                            RequestTypes::MockCAN => {
-                                println!("Send Mock Can Received");
-                                // handle_mock_can(request, &mut stream).unwrap();
-                            },
-                            RequestTypes::Unknown => {
-                                println!("Received a Malformed Input");
-                            }
-                            _ => ()
-                        }
-                    },
-                    requests::RequestParserResult::InvalidRequest => {
-                        println!("Invalid Request Received");
-                    },
-                    _ => ()
-                };
-                ()
-            }
-            Err(err) => {
-                println!("Error Connecting to stream: {}", err);
-            }
-        }
-    }
-    Ok(())
-}
-
 #[derive(Debug)]
 pub enum Error {
     InvalidState(&'static str),
@@ -216,8 +144,9 @@ pub enum Error {
     UdpSocketError(std::io::Error),
     CanSocketError(can::Error),
     PollerError(std::io::Error),
-    UninitializedUdpSocket,
     InvalidAddr(std::io::Error),
+    UninitializedUdpSocket,
+    UninitializedCanSocket,
     AddrParseError,
 }
 
@@ -243,7 +172,7 @@ enum PollType {
 pub struct Server<A: std::net::ToSocketAddrs> {
     keys: PollKeys,
     tcp_socket: Option<TcpListener>,
-    udp_socket: Option<UdpSocket>,
+    udp_socket: Option<Arc<UdpSocket>>,
     can_socket: Option<socketcan::CANSocket>,
     tcp_stream: Option<TcpStream>,
     socket_poller: Poller,                      // Socket poller is our interface to listen to the os to tell us when io (sockets) are ready
@@ -290,14 +219,29 @@ impl<A: std::net::ToSocketAddrs> Server<A> {
         self.open_can_socket()?;
 
         let (sender, receiver): (std::sync::mpsc::Sender<socketcan::CANFrame>, std::sync::mpsc::Receiver<socketcan::CANFrame>) = std::sync::mpsc::channel();
+        {
 
-        // START CAN FRAME HANDLER -> TODO Move this somewhere else
-        std::thread::spawn(move || loop {
-            // When the sender goes out of scope, this call will fail and the thread will close
-            let frame = receiver.recv().unwrap();
-
-        });
-        // END CAN FRAME HANDLER
+            let udp_socket = self.udp_socket.as_ref().expect("Udp Socket should be initialized by this point").clone();
+            // START CAN FRAME HANDLER -> TODO Move this somewhere else =============================
+            std::thread::spawn(move || loop {
+                // When the sender goes out of scope, this call will fail and the thread will close
+                let frame = receiver.recv().unwrap();
+                if frame.is_error() {
+                    println!("Frame Error Received");
+                } else {
+                    // TODO - Better Structure here including data translation and not just forwarding as json
+                    let packet = object!{
+                        id: frame.id(),
+                        data: frame.data(),
+                    };
+                    match udp_socket.send(packet.dump().as_bytes()) {
+                        Ok(bytes_written) => println!("Send {} bytes on udp", bytes_written),
+                        Err(e) => println!("Error sending bytes: {:?}", e),
+                    }
+                }
+            });
+        }
+            // END CAN FRAME HANDLER ================================================================
 
 
         self.poll_tcp_socket(PollType::Add)?;
@@ -315,9 +259,13 @@ impl<A: std::net::ToSocketAddrs> Server<A> {
                     self.handle_tcp_socket_event(event)?;
                     self.poll_tcp_socket(PollType::Modify)?;
                 } else if event.key == self.keys.udp_socket {
-
+                    println!("UDP Message Received: {:?}", self.read_udp()?);
+                    let frame = socketcan::CANFrame::new(0, b"test", false, false).map_err(|e| Error::InvalidState("Failed to make a frame"))?;
+                    sender.send(frame).unwrap();
+                    self.poll_udp_socket(PollType::Modify)?;
                 } else if event.key == self.keys.can_socket {
-
+                    sender.send(self.get_can_frame()?).unwrap();
+                    self.poll_can_socket(PollType::Modify)?;
                 }
             }
         }
@@ -340,8 +288,8 @@ impl<A: std::net::ToSocketAddrs> Server<A> {
 
     fn poll_udp_socket(&self, poll_type: PollType) -> Result<(), Error> {
         match poll_type {
-            PollType::Add => self.socket_poller.add(self.udp_socket.as_ref().unwrap(), Event::readable(self.keys.udp_socket)).map_err(|e| Error::PollerError(e)),
-            PollType::Modify => self.socket_poller.modify(self.udp_socket.as_ref().unwrap(), Event::readable(self.keys.udp_socket)).map_err(|e| Error::PollerError(e))
+            PollType::Add => self.socket_poller.add(&self.udp_socket.as_ref().unwrap() as &std::net::UdpSocket, Event::readable(self.keys.udp_socket)).map_err(|e| Error::PollerError(e)),
+            PollType::Modify => self.socket_poller.modify(&self.udp_socket.as_ref().unwrap() as &std::net::UdpSocket, Event::readable(self.keys.udp_socket)).map_err(|e| Error::PollerError(e))
         }
     }
 
@@ -378,7 +326,7 @@ impl<A: std::net::ToSocketAddrs> Server<A> {
     }
 
     fn open_udp_socket<Addr: std::net::ToSocketAddrs>(&mut self, addr: Addr) -> Result<(), Error> {
-        self.udp_socket = Some(UdpSocket::bind(addr).map_err(|e| Error::UdpSocketError(e))?);
+        self.udp_socket = Some(Arc::new(UdpSocket::bind(addr).map_err(|e| Error::UdpSocketError(e))?));
         self.udp_socket.as_ref().unwrap().set_nonblocking(true).map_err(|e| Error::UdpSocketError(e))?;
         Ok(())
     }
@@ -397,7 +345,7 @@ impl<A: std::net::ToSocketAddrs> Server<A> {
     fn handle_tcp_socket_event(&mut self, _event: &Event) -> Result<(), Error> {
         if let Some(tcp_socket) = &self.tcp_socket {
             match tcp_socket.accept() {
-                Ok((mut stream, addr)) => {
+                Ok((mut stream, mut addr)) => {
                     println!("Connected to a new stream with addr: {}", addr);
                     let request = stream_utils::read_all(&mut stream, self.config.buffer_size).unwrap_or(b"@@Failed@@\r\n".to_vec());
                     println!("Request: \n{}", std::str::from_utf8(&request).unwrap());
@@ -408,6 +356,8 @@ impl<A: std::net::ToSocketAddrs> Server<A> {
                             match value {
                                 RequestTypes::Handshake => {
                                     println!("HandShake received");
+                                    addr.set_port(8888);
+                                    self.udp_socket.as_ref().unwrap().connect(addr).map_err(|e| Error::UdpSocketError(e))?; // Connect to the desktop to send it messages over udp
                                     stream.write(b"8888").map_err(|e| Error::TcpSocketError(e))?; // Tell the Handshake requester what udp port to listen on
                                 },
                                 RequestTypes::MockCAN => {
@@ -432,8 +382,13 @@ impl<A: std::net::ToSocketAddrs> Server<A> {
         Ok(())
     }
 
-    fn handle_can_event(&mut self) -> Result<socketcan::CANFrame, Error> {
-        match self.can_socket.as_ref()
+    fn get_can_frame(&mut self) -> Result<socketcan::CANFrame, Error> {
+        match self.can_socket.as_ref() {
+            Some(can_socket) => {
+                Ok(can_socket.read_frame().map_err(|e| Error::CanSocketError(can::Error::ReadError(e)))?)
+            },
+            None => Err(Error::UninitializedCanSocket)
+        }
     }
 
     fn read_udp(&mut self) -> Result<Vec<u8>, Error> {

@@ -30,7 +30,9 @@ impl Config {
 pub enum Error {
     FailedToOpenSocket(socketcan::CANSocketOpenError),
     PollerError(io::Error),
-    UnableToSetNonBlocking(io::Error)
+    UnableToSetNonBlocking(io::Error),
+    ReadError(io::Error),
+    WriteError(io::Error),
 }
 
 
