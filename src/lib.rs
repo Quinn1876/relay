@@ -3,3 +3,4 @@ pub mod requests;
 // mod i2c;
 pub mod tcp_server;
 pub mod can;
+pub mod roboteq;

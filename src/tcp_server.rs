@@ -240,8 +240,8 @@ impl<A: std::net::ToSocketAddrs> Server<A> {
                     }
                 }
             });
-        }
             // END CAN FRAME HANDLER ================================================================
+        }
 
 
         self.poll_tcp_socket(PollType::Add)?;
