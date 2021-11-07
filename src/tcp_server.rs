@@ -1,11 +1,19 @@
 use polling::{ Event, Poller, Source };
-use socketcan::{ CANSocket, ShouldRetry };
+use socketcan::{ CANSocket, ShouldRetry, CANFrame };
 use std::time::Duration;
 use std::net::{ TcpListener, TcpStream, IpAddr, Ipv4Addr, SocketAddr, UdpSocket };
 use std::io::prelude::*;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    mpsc::{
+        channel,
+        Receiver,
+        Sender
+    }
+};
 use json::object;
 
+use crate::roboteq::Roboteq;
 use crate::requests;
 use crate::stream_utils;
 use crate::can;
@@ -158,28 +166,89 @@ enum ServerState {
     Recovery
 }
 
+#[derive(PartialEq)]
 enum PodStates {
     LowVoltage,
     Armed,
     AutoPilot,
-    Breaking,
+    Braking,
     EmergencyBreak,
     SystemFailure,
+    Resting,
+    ManualOperationWaiting,
+    Accellerating,
+    AtSpeed,
+    Decelerating,
+    Invalid
     // More to come for manual operation
 }
 
+impl PodStates {
+    fn to_byte(self) -> u8 {
+        match self {
+            PodStates::Resting                  => 0x00,
+            PodStates::LowVoltage               => 0x01,
+            PodStates::Armed                    => 0x02,
+            PodStates::AutoPilot                => 0x03,
+            PodStates::Braking                  => 0x04,
+            PodStates::EmergencyBreak           => 0x05,
+            PodStates::SystemFailure            => 0x06,
+            PodStates::ManualOperationWaiting   => 0x07,
+            PodStates::Accellerating            => 0x08,
+            PodStates::AtSpeed                  => 0x09,
+            PodStates::Decelerating             => 0x0A,
+            PodStates::Invalid                  => 0x0B
+        }
+    }
+
+    fn from_byte(byte: u8) -> Self {
+        match byte {
+            0x00 => PodStates::Resting,
+            0x01 => PodStates::LowVoltage,
+            0x02 => PodStates::Armed,
+            0x03 => PodStates::AutoPilot,
+            0x04 => PodStates::Braking,
+            0x05 => PodStates::EmergencyBreak,
+            0x06 => PodStates::SystemFailure,
+            0x07 => PodStates::ManualOperationWaiting,
+            0x08 => PodStates::Accellerating,
+            0x09 => PodStates::AtSpeed,
+            0x0A => PodStates::Decelerating,
+            _ => PodStates::Invalid
+        }
+    }
+}
+
+trait RelayCan {
+    fn send_pod_state(&self, state: &PodStates) -> std::io::Result<()>;
+}
+
+impl RelayCan for CANSocket {
+    fn send_pod_state(&self, state: &PodStates) -> std::io::Result<()> {
+        self.write_frame_insist(
+            &CANFrame::new(0, &[state.to_byte()], false, false).expect("Frame to work")
+        )
+    }
+}
+
+// Describes a message that can be sent to the CAN thread
+enum CANMessage {
+    ChangeState(PodStates)
+}
 
 pub fn run_threads() -> Result<(), Error> {
-    // TODO Impliment
+    let (udpSender, udpReceiver) = channel();
+    let (canSender, canReceiver): (Sender<CANMessage>, Receiver<CANMessage>) = channel();
 
     // TCP Thread
     std::thread::spawn(move || {
-        let listener = TcpListener::bind("127.0.0.1:80").expect("Should be able to connect");
+        // Open and Bind to port 8080 TODO: Move into config
+        let listener = TcpListener::bind("0.0.0.0:8080").expect("Should be able to connect");
         let mut request_parser = requests::RequestParser::new();
         intialize_request_parser(&mut request_parser);
-        let buffer_size = 128;
+        let buffer_size = 128; // TODO: Move into Config
 
-        // accept connections and process them serially
+        // accept connections and process them sequentially
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => handle_tcp_socket_event(stream, &request_parser, buffer_size).unwrap(),
@@ -199,17 +268,37 @@ pub fn run_threads() -> Result<(), Error> {
         let interface = "can0"; // TODO move to config
         let socket = socketcan::CANSocket::open(interface).expect(format!("Unable to Connect to CAN interface: {}", interface));
 
-        let pod_state = PodStates::LowVoltage;
+        let mut requested_pod_state = PodStates::LowVoltage;
+        let mut bms_state = PodStates::LowVoltage;
+        // TODO: IMPLE mc_state
 
-        socket.set_read_timeout(Duration::from_millis(1));
+        socket.set_read_timeout(Duration::from_millis(1)); // TODO Move Duration into config
         loop {
             // poll read
-            let response = socket.read_frame();
+            let response = socket.read_frame(); // with timeout
             if response.should_retry() {
+                // Timeout with no message
 
+            } else if let Ok(frame) = response {
+                // Frame Received
+            } else {
+                // ERROR
             }
 
             // check for state message from udp
+            if let Ok(message) = canReceiver.try_recv() {
+                match message {
+                    CANMessage::ChangeState(newState) => {
+                        requested_pod_state = newState;
+                    }
+                }
+            }
+
+            if requested_pod_state == bms_state && requested_pod_state == PodStates::AutoPilot {
+                socket.set_motor_throttle(1, 1, 100); // TODO move this into config
+            } else {
+                socket.send_pod_state(&requested_pod_state)?;
+            }
 
         }
     });
@@ -256,7 +345,7 @@ fn handle_tcp_socket_event(mut stream: TcpStream, request_parser: &requests::Req
                     stream.write(b"8888").map_err(|e| Error::TcpSocketError(e))?; // Tell the Handshake requester what udp port to listen on
                 },
                 RequestTypes::Disconnect => {
-                    println!("Send Mock Can Received");
+                    println!("Disconnect Received");
                     todo!()
                 },
                 RequestTypes::Unknown => {
