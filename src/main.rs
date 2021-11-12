@@ -10,10 +10,10 @@ fn main() -> Result<(), std::io::Error> {
         config = relay::tcp_server::Config::default();
     }
 
-    let mut server = relay::tcp_server::Server::new(config);
-    server.run_poll().unwrap_or_else(|err| {
-        println!("Error: {:?}", err);
-    });
+    // let mut server = relay::tcp_server::Server::new(config);
+    // server.run_poll().unwrap_or_else(|err| {
+    //     println!("Error: {:?}", err);
+    // });
     // relay::tcp_server::run(config).unwrap_or_else(|err| {
     //     println!("Error: {}", err);
     // });

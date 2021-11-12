@@ -7,21 +7,15 @@
  */
 
 use socketcan;
-use std::sync::Arc;
-
-
-pub enum RoboteqError {
-    MessageError(socketcan::ConstructionError),
-    WriteError(std::io::Error)
-}
+use crate::tcp_server::CanError;
 
 pub trait Roboteq {
-    fn send_msg(&self, node_id: u32, is_query: bool, empty_bytes: u32, index: u16, subindex: u8, data: &[u8]) -> Result<(), RoboteqError>;
-    fn set_motor_throttle(&self, node_id: u32, max_motors: u8, throttle_percent: u32) -> Result<(), RoboteqError>;
+    fn send_msg(&self, node_id: u32, is_query: bool, empty_bytes: u32, index: u16, subindex: u8, data: &[u8]) -> Result<(), CanError>;
+    fn set_motor_throttle(&self, node_id: u32, max_motors: u8, throttle_percent: u32) -> Result<(), CanError>;
 }
 
 impl Roboteq for socketcan::CANSocket {
-    fn send_msg(&self, node_id: u32, is_query: bool, empty_bytes: u32, index: u16, subindex: u8, data: &[u8]) -> Result<(), RoboteqError> {
+    fn send_msg(&self, node_id: u32, is_query: bool, empty_bytes: u32, index: u16, subindex: u8, data: &[u8]) -> Result<(), CanError> {
         let byte_0: u8 = 0b00000000 | ((if is_query { 4u8 } else { 2u8 }) << 4) | ((empty_bytes as u8) << 2);
         let data: [u8; 8] = [
             byte_0,
@@ -33,12 +27,12 @@ impl Roboteq for socketcan::CANSocket {
             data[2],
             data[3]
         ];
-        let message = socketcan::CANFrame::new(0x600 + node_id, &data, false, false).map_err(|e| RoboteqError::MessageError(e))?;
-        self.write_frame(&message).map_err(|e| RoboteqError::WriteError(e))?;
+        let message = socketcan::CANFrame::new(0x600 + node_id, &data, false, false).map_err(|e| CanError::MessageError(e))?;
+        self.write_frame(&message).map_err(|e| CanError::WriteError(e))?;
         Ok(())
     }
 
-    fn set_motor_throttle(&self, node_id: u32, max_motors: u8, throttle_percent: u32) -> Result<(), RoboteqError> {
+    fn set_motor_throttle(&self, node_id: u32, max_motors: u8, throttle_percent: u32) -> Result<(), CanError> {
         self.send_msg(node_id, false, 0, 0x2000, max_motors, &to_bytes(throttle_percent))
     }
 }
