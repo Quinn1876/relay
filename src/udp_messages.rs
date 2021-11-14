@@ -19,6 +19,7 @@ pub enum DesktopStateMessageError {
 }
 
 mod test {
+    #[allow(unused_imports)]
     use super::DesktopStateMessage;
     #[test]
     fn test_json_bytes() {

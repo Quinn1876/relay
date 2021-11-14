@@ -177,7 +177,7 @@ pub enum Error {
     AddrParseError,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Copy, Clone)]
 enum ServerState {
     Startup,
     Disconnected,
@@ -223,23 +223,32 @@ enum WorkerMessage {
     CanFrameAndTimeStamp(CANFrame, NaiveDateTime)
 }
 
+enum TcpMessage {
+    EnteringRecovery,
+    RecoveryComplete,
+}
+
 pub fn run_threads() -> Result<(), Error> {
     let (udpSender, udpReceiver): (Sender<UDPMessage>, Receiver<UDPMessage>) = channel();
     let (canSender, canReceiver): (Sender<CANMessage>, Receiver<CANMessage>) = channel();
     let (workerSender, workerReceiver): (Sender<WorkerMessage>, Receiver<WorkerMessage>) = channel();
+    let (tcpSender, tcpReceiver): (Sender<TcpMessage>, Receiver<TcpMessage>) = channel();
 
     // TCP Thread
     std::thread::spawn(move || {
         // Open and Bind to port 8080 TODO: Move into config
         let listener = TcpListener::bind("0.0.0.0:8080").expect("Should be able to connect");
         let mut request_parser = requests::RequestParser::new();
-        intialize_request_parser(&mut request_parser);
+        initialize_request_parser(&mut request_parser);
         let buffer_size = 128; // TODO: Move into Config
+
+        let mut server_state = ServerState::Disconnected;
+        udpSender.send(UDPMessage::StartupComplete).expect("Unable to send Message to UDP Thread to notify startup complete");
 
         // accept connections and process them sequentially
         for stream in listener.incoming() {
             match stream {
-                Ok(stream) => handle_tcp_socket_event(stream, &request_parser, buffer_size).unwrap(),
+                Ok(stream) => handle_tcp_socket_event(stream, &request_parser, buffer_size, &udpSender, &mut server_state, &tcpReceiver).unwrap(),
                 Err(e) => println!("An Error Occured While Handling a TCP Conecction: {:?}", e),
             }
         }
@@ -291,7 +300,7 @@ pub fn run_threads() -> Result<(), Error> {
 
         // END Section - Common Functions
 
-        loop {
+        'main_loop: loop {
             match server_state {
                 ServerState::Disconnected => {
                     match get_udp_receiver_message_or_panic() {
@@ -321,6 +330,7 @@ pub fn run_threads() -> Result<(), Error> {
                                             handle_telemetry_timestamp(&mut last_received_telemetry_timestamp, desktop_state_message.most_recent_timestamp);
                                         } else {
                                             invalid_transition_recognized(&mut errno, &mut server_state);
+                                            continue 'main_loop;
                                         }
                                     } else {
                                         if current_pod_state.can_transition_to(&desktop_state_message.requested_state) {
@@ -332,10 +342,12 @@ pub fn run_threads() -> Result<(), Error> {
                                                     handle_telemetry_timestamp(&mut last_received_telemetry_timestamp, desktop_state_message.most_recent_timestamp);
                                                 } else {
                                                     invalid_transition_recognized(&mut errno, &mut server_state);
+                                                    continue 'main_loop;
                                                 }
                                             }
                                         } else {
                                             invalid_transition_recognized(&mut errno, &mut server_state);
+                                            continue 'main_loop;
                                         }
                                     }
                                 } else {
@@ -427,9 +439,10 @@ pub fn run_threads() -> Result<(), Error> {
                 println!("CAN SOCKET: Read timeout no message Received");
             } else if let Ok(frame) = response {
                 // Frame Received
+
                 workerSender.send(WorkerMessage::CanFrameAndTimeStamp(frame, Utc::now().naive_local())).expect("Unable to send message from CAN Thread on Worker Channel");
             } else {
-                // ERROR
+                // ERROR Reading from Can socket
             }
 
             // check for state message from udp
@@ -478,7 +491,7 @@ pub fn run_threads() -> Result<(), Error> {
     }
 }
 
-fn intialize_request_parser(request_parser: &mut requests::RequestParser<RequestTypes>) {
+fn initialize_request_parser(request_parser: &mut requests::RequestParser<RequestTypes>) {
     /*
     * Add Supported TCP Queries here
     * Each Query string will correspond to a RequestType
@@ -490,26 +503,65 @@ fn intialize_request_parser(request_parser: &mut requests::RequestParser<Request
     request_parser.insert("@@Failed@@\r\n", RequestTypes::Unknown); // Special Message which is written into the request in the event of an error reading the message
 }
 
+trait CustomTcpStream {
+    fn write_message(&mut self, buf: &[u8]) -> Result<usize, Error>;
+}
+
+impl CustomTcpStream for TcpStream {
+    fn write_message(&mut self, buf: &[u8]) -> Result<usize, Error> {
+        self.write(buf).map_err(|e| Error::TcpSocketError(e))
+    }
+}
+
 /**
  * @func handle_tcp_socket_event
  * @brief
  */
-fn handle_tcp_socket_event(mut stream: TcpStream, request_parser: &requests::RequestParser<RequestTypes>, buffer_size: usize) -> Result<(), Error> {
+fn handle_tcp_socket_event(
+    mut stream: TcpStream,
+    request_parser: &requests::RequestParser<RequestTypes>,
+    buffer_size: usize,
+    udp_sender: &Sender<UDPMessage>,
+    server_state: &mut ServerState,
+    tcp_receiver: &Receiver<TcpMessage>
+) -> Result<(), Error> {
     let mut addr = stream.peer_addr().map_err(|e| Error::TcpSocketError(e))?;
     println!("Connected to a new stream with addr: {}", addr);
     let request = stream_utils::read_all(&mut stream, buffer_size).unwrap_or(b"@@Failed@@\r\n".to_vec());
     println!("Request: \n{}", std::str::from_utf8(&request).unwrap());
 
+    // Handle any Messages from the other threads before Handling the Connection
+    while let Ok(message) = tcp_receiver.try_recv() {
+        match message {
+            TcpMessage::EnteringRecovery => *server_state = ServerState::Recovery,
+            TcpMessage::RecoveryComplete => *server_state = ServerState::Disconnected,
+        }
+    }
+
+    let mut new_state = *server_state;
     /* Remove the Query String from the request and match it to the associated handler function */
     match request_parser.strip_line_and_get_value(request.as_slice()) {
         requests::RequestParserResult::Success((&value, _request)) => {
             match value {
                 RequestTypes::Connect => {
-                    println!("Connection Attempted received");
-                    // TODO add error checking for existing connections
-                    addr.set_port(8888);
-                    // TODO Send message to UDP thread to connect to addr
-                    stream.write(b"8888").map_err(|e| Error::TcpSocketError(e))?; // Tell the Handshake requester what udp port to listen on
+                    println!("Connection Attempt received");
+                    match server_state {
+                        ServerState::Disconnected => {
+                            addr.set_port(8888);
+                            udp_sender.send(UDPMessage::ConnectToHost(addr)).expect("Should be able to send Message to UDP Socket from TCP Socket");
+                            stream.write_message(b"OK 8888")?; // Tell the Handshake requester what udp port to listen on
+                            new_state = ServerState::Connected;
+                        },
+                        ServerState::Connected => {
+                            stream.write_message(b"ERROR POD Already Connected to Controller")?;
+                        },
+                        ServerState::Startup => {
+                            panic!("TCP Socket should not be accepting connections in the Startup State")
+                        },
+                        ServerState::Recovery => {
+                            stream.write_message(b"ERROR Unable to Connect to Pod while recovering. Please Wait for recovery to finish");
+                        }
+                    }
                 },
                 RequestTypes::Disconnect => {
                     println!("Disconnect Received");
@@ -528,81 +580,7 @@ fn handle_tcp_socket_event(mut stream: TcpStream, request_parser: &requests::Req
         },
         _ => ()
     };
-    Ok(())
-}
-
-/**
- * @func handle_handshake
- * @param _request: This is the body of the request
- * @param stream: Tcp stream, can be written to and read from
- *
- * @brief: This is the main function for running the POD
- * A UDP port is bound and watched for information coming from the
- * controller
- * Once opened, the controller is notified of the port to begin sending to
- * over the tcp stream.
- *
- * TODO: Interface with the Can Board to retrieve CAN Packets to send to the controller
- * TODO: Interface with the CAN Board to send CAN packets with information from the controller
- */
-fn handle_handshake(_request: &[u8], stream: &mut TcpStream, can_config: & can::Config) -> Result<(), Error> {
-
-    let mut addr = stream.local_addr().map_err(|e| Error::UdpSocketError(e))?;
-    addr.set_port(8888);
-
-    let udp_socket = UdpSocket::bind(addr).map_err(|e| Error::UdpSocketError(e))?;
-    let mut can_socket = can::open_socket(can_config).map_err(|e| Error::CanSocketError(e))?;
-
-    let udp_key = 0;
-    let can_key = 1;
-
-    let socket_poller = Poller::new().map_err(|e| Error::PollerError(e))?;
-    socket_poller.add(&can_socket, Event::readable(can_key)).map_err(|e| Error::PollerError(e))?;
-    socket_poller.add(&udp_socket, Event::readable(udp_key)).map_err(|e| Error::PollerError(e))?;
-
-
-    println!("Bound to udpSocket {}", addr);
-    stream.write(b"8888").map_err(|e| Error::UdpSocketError(e))?; // Tell the Handshake requester what port to listen on
-
-    let mut events = Vec::new();
-    loop {
-        events.clear();
-        socket_poller.wait(&mut events, None).map_err(|e| Error::PollerError(e))?;
-
-        for event in &events {
-            if event.key == udp_key {
-                let mut buffer = [0u8; 256];
-                let (amount, src) = udp_socket.recv_from(&mut buffer).map_err(|e| Error::UdpSocketError(e))?;
-                println!("UDP Packet: {}", String::from_utf8(buffer.to_vec()).unwrap());
-
-                socket_poller.modify(&udp_socket, Event::readable(udp_key)).map_err(|e| Error::PollerError(e))?;
-            }
-            else if event.key == can_key {
-                let frame = can_socket.read_frame().unwrap();
-                println!("Frame: {:?}", frame);
-                socket_poller.modify(&can_socket, Event::readable(can_key)).map_err(|e| Error::PollerError(e))?;
-            }
-        }
-    }
-}
-
-
-fn handle_mock_can(_request: &[u8], stream: &mut TcpStream) -> std::io::Result<()> {
-    let mut addr = stream.local_addr()?;
-    addr.set_port(8888);
-    let udp_socket = UdpSocket::bind(addr)?;
-    println!("Bound to udpSocket {}", addr);
-    stream.write(b"8888")?; // Tell the Handshake requester what port to listen on
-
-    let mut buffer = [0u8; 256];
-
-    let (_amount, src) = udp_socket.recv_from(&mut buffer)?;
-
-    for _i in 0..7 {
-        let buf = [b'B', b'M', b'S', b'1', b'\r', b'\n', 100u8];
-        udp_socket.send_to(&buf, src)?;
-    }
-
+    *server_state = new_state;
     Ok(())
 }
 

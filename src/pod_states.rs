@@ -18,8 +18,8 @@ pub enum PodStates {
 }
 
 mod test {
-    use super::PodStates;
-    use super::HashMap;
+    #[allow(unused_imports)]
+    use super::{ PodStates, HashMap };
     #[test]
     fn test_states() {
         for i in 0u8..0x0Bu8 {
