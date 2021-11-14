@@ -23,7 +23,7 @@ use json::{
     object,
     number::Number
 };
-use chrono::{ NaiveDateTime };
+use chrono::{ NaiveDateTime, Utc };
 use polling::{ Event, Poller };
 use socketcan::{ CANSocket, ShouldRetry, CANFrame };
 
@@ -32,7 +32,10 @@ use crate::roboteq::Roboteq;
 use crate::requests;
 use crate::stream_utils;
 use crate::can;
-use crate::udp_messages::DesktopStateMessage;
+use crate::udp_messages::{ DesktopStateMessage, Errno, CustomUDPSocket };
+use crate::udp_messages;
+use crate::pod_states::PodStates;
+use crate::pod_data::PodData;
 
 #[cfg(test)]
 mod test {
@@ -212,10 +215,12 @@ enum CANMessage {
 enum UDPMessage {
     ConnectToHost(SocketAddr),
     StartupComplete,
+    PodStateChanged(PodStates),
+    TelemetryDataAvailable(PodData, NaiveDateTime)
 }
 
 enum WorkerMessage {
-    CanFrameAndTimeStamp(CANFrame, SystemTime)
+    CanFrameAndTimeStamp(CANFrame, NaiveDateTime)
 }
 
 pub fn run_threads() -> Result<(), Error> {
@@ -248,13 +253,20 @@ pub fn run_threads() -> Result<(), Error> {
 
         let mut server_state = ServerState::Startup;
 
-        let current_pod_state = PodStates::LowVoltage; // ************* Figure out what the initial Value for this should be
-        let next_pod_state = PodStates::LowVoltage; // ************* Figure out what the initial Value for this should be
+        let mut current_pod_state = PodStates::LowVoltage; // ************* Figure out what the initial Value for this should be
+        let mut next_pod_state = PodStates::LowVoltage; // ************* Figure out what the initial Value for this should be
 
         let mut socket_buffer = [0u8; 256];
-        let mut errno = 0;
+        let mut errno = Errno::NoError;
+        let mut timeout_counter = 0;
+        let mut last_received_telemetry_timestamp = Utc::now().naive_local();
+        let mut current_pod_data = PodData::new();
+        let mut current_telemetry_timestamp = Utc::now().naive_local();
 
-        let get_message = || {
+        let max_timer_timeout = 10; // TODO Change this
+
+        // BEGIN Section - Common Functions
+        let get_udp_receiver_message_or_panic = || {
             if let Ok(message) = udpReceiver.recv() {
                 message
             } else {
@@ -263,10 +275,26 @@ pub fn run_threads() -> Result<(), Error> {
             }
         };
 
+        let invalid_transition_recognized = |errno: &mut Errno, server_state: &mut ServerState| {
+            *errno = Errno::InvalidTransitionRequest;
+            *server_state = ServerState::Recovery; // TODO: What other Threads need to know about this?
+        };
+
+        let handle_telemetry_timestamp = |last_received_telemetry_timestamp: &mut NaiveDateTime, timestamp: NaiveDateTime| {
+            *last_received_telemetry_timestamp = timestamp;
+        };
+
+        let trigger_transition_to_new_state = |next_pod_state: &mut PodStates, requested_state: PodStates| {
+            canSender.send(CANMessage::ChangeState(requested_state.clone())).expect("Should be able to Send a message to the Can thread from the UDP thread");
+            *next_pod_state = requested_state;
+        };
+
+        // END Section - Common Functions
+
         loop {
             match server_state {
                 ServerState::Disconnected => {
-                    match get_message() {
+                    match get_udp_receiver_message_or_panic() {
                         UDPMessage::ConnectToHost(addr) => {
                             if let Ok(_) = udp_socket.connect(addr) {
                                 server_state = ServerState::Connected;
@@ -282,24 +310,82 @@ pub fn run_threads() -> Result<(), Error> {
                 ServerState::Connected => {
                     match udp_socket.recv(&mut socket_buffer) {
                         Ok(bytes_received) => {
-                            if let Ok(desktop_state_message) = DesktopStateMessage::from_json_bytes(&socket_buffer) {
-                                if desktop_state_message.requested_state != current_pod_state && current_pod_state.can_transition_to(desktop_state_message.requested_state) {
-
+                            // When the POD Enters an Error State, we no longer need to follow the decision tree
+                            // for where or not we can transition to a new state etc. The Only Goal For Error State is
+                            // to hopefully keep the Rpi connected to the desktop long enough to tell the desktop that
+                            // A failure was found and that the pod is working to shut down
+                            if !current_pod_state.is_error_state() {
+                                if let Ok(desktop_state_message) = DesktopStateMessage::from_json_bytes(&socket_buffer) {
+                                    if desktop_state_message.requested_state == current_pod_state {
+                                        if next_pod_state == current_pod_state {
+                                            handle_telemetry_timestamp(&mut last_received_telemetry_timestamp, desktop_state_message.most_recent_timestamp);
+                                        } else {
+                                            invalid_transition_recognized(&mut errno, &mut server_state);
+                                        }
+                                    } else {
+                                        if current_pod_state.can_transition_to(&desktop_state_message.requested_state) {
+                                            if desktop_state_message.requested_state == next_pod_state {
+                                                handle_telemetry_timestamp(&mut last_received_telemetry_timestamp, desktop_state_message.most_recent_timestamp);
+                                            } else {
+                                                if current_pod_state == next_pod_state {
+                                                    trigger_transition_to_new_state(&mut next_pod_state, desktop_state_message.requested_state);
+                                                    handle_telemetry_timestamp(&mut last_received_telemetry_timestamp, desktop_state_message.most_recent_timestamp);
+                                                } else {
+                                                    invalid_transition_recognized(&mut errno, &mut server_state);
+                                                }
+                                            }
+                                        } else {
+                                            invalid_transition_recognized(&mut errno, &mut server_state);
+                                        }
+                                    }
+                                } else {
+                                    // TODO: This needs to change once we've figured out how we want to handle an error
+                                    panic!("Failed to Read DesktopStateMessage in UDP Handler while in Connected State");
                                 }
-                            } else {
-                                // TODO: This needs to change once we've figured out how we want to handle an error
-                                panic!("Failed to Read DesktopStateMessage in UDP Handler while in Connected State");
+                                timeout_counter = 0;
                             }
                         },
                         Err(error) => {
                             println!("Error: {:?}", error); // TODO: Figure out what error is returned for a timeout so that case can be handled separately
+
+                            timeout_counter += 1; // Move this to the timeout  portion of the error handler
+                            if timeout_counter >= max_timer_timeout {
+                                // TODO Enter into Recovery. Assume Desktop Disconnected
+                            }
                         }
                     }
+                    // Check for new Messages from other threads
+                    while let Ok(message) = udpReceiver.try_recv() {
+                        match message {
+                            UDPMessage::PodStateChanged(newState) => {
+                                if newState.is_error_state() {
+                                    errno = Errno::GeneralPodFailure;
+                                }
+                                current_pod_state = newState;
+                            },
+                            UDPMessage::TelemetryDataAvailable(newData, timestamp) => {
+                                current_pod_data = newData;
+                                current_telemetry_timestamp = timestamp;
+                            },
+                            unrecognized_message => {
+                                panic!("UnExpected Message Received on UDP mpsc channel while in Connected State: {:?}", unrecognized_message);
+                            }
+                        }
+                    }
+                    // Send Message Back to Desktop
+                    let pod_state_message = if current_telemetry_timestamp.timestamp() > last_received_telemetry_timestamp.timestamp() {
+                        udp_messages::PodStateMessage::new(current_pod_state, next_pod_state, errno, &current_pod_data, current_telemetry_timestamp, matches!(server_state, ServerState::Recovery))
+                    } else {
+                        udp_messages::PodStateMessage::new_no_telemetry(current_pod_state, next_pod_state, errno, current_telemetry_timestamp, matches!(server_state, ServerState::Recovery))
+                    };
+                    udp_socket.send_pod_state_message(&pod_state_message);
                 },
                 ServerState::Recovery => {},
                 ServerState::Startup => {
-                    match get_message() {
-                        UDPMessage::StartupComplete => { server_state = ServerState::Disconnected; },
+                    match get_udp_receiver_message_or_panic() {
+                        UDPMessage::StartupComplete => {
+                            server_state = ServerState::Disconnected;
+                        },
                         message => {
                             println!("Received Message on UDP mpsc channel during Startup: {:?}", message);
                         }
@@ -307,7 +393,6 @@ pub fn run_threads() -> Result<(), Error> {
                 },
             }
         }
-
     });
 
     #[allow(unused_doc_comments)]
@@ -342,7 +427,7 @@ pub fn run_threads() -> Result<(), Error> {
                 println!("CAN SOCKET: Read timeout no message Received");
             } else if let Ok(frame) = response {
                 // Frame Received
-                workerSender.send(WorkerMessage::CanFrameAndTimeStamp(frame, SystemTime::now())).expect("Unable to send message from CAN Thread on Worker Channel");
+                workerSender.send(WorkerMessage::CanFrameAndTimeStamp(frame, Utc::now().naive_local())).expect("Unable to send message from CAN Thread on Worker Channel");
             } else {
                 // ERROR
             }

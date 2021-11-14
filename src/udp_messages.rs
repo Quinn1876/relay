@@ -5,11 +5,13 @@ use json::{
 use chrono::{ NaiveDateTime };
 use crate::pod_states::PodStates;
 use crate::pod_data::PodData;
+use std::net::UdpSocket;
 
 pub struct DesktopStateMessage {
-    requested_state: PodStates,
-    most_recent_timestamp: NaiveDateTime
+    pub requested_state: PodStates,
+    pub most_recent_timestamp: NaiveDateTime
 }
+
 #[derive(Debug)]
 pub enum DesktopStateMessageError {
     JsonParseError(json::Error),
@@ -62,6 +64,7 @@ impl DesktopStateMessage {
     }
 }
 
+#[derive(Copy, Clone)]
 pub enum Errno {
     NoError,
     InvalidTransitionRequest,
@@ -86,7 +89,7 @@ pub struct PodStateMessage {
     current_state: PodStates,
     pending_next_state: PodStates,
     errno: Errno,
-    telemetry: PodData,
+    telemetry: Option<PodData>,
     telemetry_timestamp: NaiveDateTime,
     recovering: bool
 }
@@ -97,10 +100,42 @@ impl PodStateMessage {
             current_state: self.current_state.to_byte(),
             pending_next_state: self.pending_next_state.to_byte(),
             errno: self.errno.to_byte(),
-            telemetry: self.telemetry.to_json(),
+            telemetry: if let Some(telemetry) = self.telemetry.as_ref() { telemetry.to_json() } else { json::JsonValue::Null },
             telemetry_timestamp: self.telemetry_timestamp.timestamp(),
             recovering: self.recovering
         };
         json_data.dump().into_bytes()
+    }
+
+    pub fn new(current_state: PodStates, pending_next_state: PodStates, errno: Errno, telemetry: &PodData, telemetry_timestamp: NaiveDateTime, recovering: bool) -> PodStateMessage {
+        PodStateMessage {
+            current_state,
+            errno,
+            pending_next_state,
+            recovering,
+            telemetry: Some(*telemetry).clone(),
+            telemetry_timestamp,
+        }
+    }
+
+    pub fn new_no_telemetry(current_state: PodStates, pending_next_state: PodStates, errno: Errno, telemetry_timestamp: NaiveDateTime, recovering: bool) -> PodStateMessage {
+        PodStateMessage {
+            current_state,
+            errno,
+            pending_next_state,
+            recovering,
+            telemetry: None,
+            telemetry_timestamp,
+        }
+    }
+}
+
+pub trait CustomUDPSocket {
+    fn send_pod_state_message(&self, msg: &PodStateMessage) -> std::io::Result<usize>;
+}
+
+impl CustomUDPSocket for UdpSocket {
+    fn send_pod_state_message(&self, msg: &PodStateMessage) -> std::io::Result<usize> {
+        self.send(&msg.to_json_bytes())
     }
 }

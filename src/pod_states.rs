@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(PartialEq, Hash, Eq, Debug)]
+#[derive(PartialEq, Hash, Eq, Debug, Copy, Clone)]
 pub enum PodStates {
     LowVoltage,
     Armed,
@@ -120,5 +120,9 @@ impl PodStates {
             PodStates::Decelerating => false,
             PodStates::Invalid => false
         }
+    }
+
+    pub fn is_error_state(&self) -> bool {
+        matches!(self, PodStates::EmergencyBrake | PodStates::SystemFailure)
     }
 }
