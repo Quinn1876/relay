@@ -1,6 +1,19 @@
-mod stream_utils;
-pub mod requests;
-// mod i2c;
+#[allow(unused_doc_comments)]
+/**
+ * In order to Compile Unit Tests in windows, we've defined socketcan as an optional dependency.
+ * This makes it easier to test code in windows that does not use socketcan. socketcan requires
+ * support for unix primitives which are not available on windows and so the code needs to be compiled on the raspberry pi itself for full testing.
+ */
+
+#[cfg(feature = "socketcan")]
 pub mod tcp_server;
-pub mod can;
+#[cfg(feature = "socketcan")]
 pub mod roboteq;
+#[cfg(feature = "socketcan")]
+pub mod can;
+
+pub mod stream_utils;
+pub mod requests;
+pub mod udp_messages;
+pub mod pod_states;
+pub mod pod_data;

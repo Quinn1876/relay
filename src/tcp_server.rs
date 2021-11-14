@@ -1,7 +1,5 @@
 #[allow(unused_doc_comments)]
 
-use polling::{ Event, Poller };
-use socketcan::{ CANSocket, ShouldRetry, CANFrame };
 use std::time::Duration;
 use std::net::{
     TcpListener,
@@ -20,12 +18,21 @@ use std::sync::{
     }
 };
 use std::time::SystemTime;
-use json::object;
+
+use json::{
+    object,
+    number::Number
+};
+use chrono::{ NaiveDateTime };
+use polling::{ Event, Poller };
+use socketcan::{ CANSocket, ShouldRetry, CANFrame };
+
 
 use crate::roboteq::Roboteq;
 use crate::requests;
 use crate::stream_utils;
 use crate::can;
+use crate::udp_messages::DesktopStateMessage;
 
 #[cfg(test)]
 mod test {
@@ -175,70 +182,6 @@ enum ServerState {
     Recovery
 }
 
-#[derive(PartialEq)]
-enum PodStates {
-    LowVoltage,
-    Armed,
-    AutoPilot,
-    Braking,
-    EmergencyBreak,
-    SystemFailure,
-    Resting,
-    ManualOperationWaiting,
-    Accellerating,
-    AtSpeed,
-    Decelerating,
-    Invalid
-    // More to come for manual operation
-}
-
-// TODO Impl some help functions to build this from a Byte array
-struct DesktopStateMessage {
-    requested_state: PodStates,
-    most_recent_time_stamp: SystemTime
-}
-
-
-
-/**
- * This Section should be kept in line with the definition in the CAN Communication Protocol Document
- * source: https://docs.google.com/spreadsheets/d/18rGH__yyJPf3jil74yTlVyFFqCOyuNzP3DCFmmIWWbo/edit?usp=drive_web&ouid=109880063725320746438
- */
-impl PodStates {
-    fn to_byte(&self) -> u8 {
-        match self {
-            PodStates::Resting                  => 0x00,
-            PodStates::LowVoltage               => 0x01,
-            PodStates::Armed                    => 0x02,
-            PodStates::AutoPilot                => 0x03,
-            PodStates::Braking                  => 0x04,
-            PodStates::EmergencyBreak           => 0x05,
-            PodStates::SystemFailure            => 0x06,
-            PodStates::ManualOperationWaiting   => 0x07,
-            PodStates::Accellerating            => 0x08,
-            PodStates::AtSpeed                  => 0x09,
-            PodStates::Decelerating             => 0x0A,
-            PodStates::Invalid                  => 0x0B
-        }
-    }
-
-    fn from_byte(byte: u8) -> Self {
-        match byte {
-            0x00 => PodStates::Resting,
-            0x01 => PodStates::LowVoltage,
-            0x02 => PodStates::Armed,
-            0x03 => PodStates::AutoPilot,
-            0x04 => PodStates::Braking,
-            0x05 => PodStates::EmergencyBreak,
-            0x06 => PodStates::SystemFailure,
-            0x07 => PodStates::ManualOperationWaiting,
-            0x08 => PodStates::Accellerating,
-            0x09 => PodStates::AtSpeed,
-            0x0A => PodStates::Decelerating,
-            _ => PodStates::Invalid
-        }
-    }
-}
 
 #[derive(Debug)]
 pub enum CanError {
@@ -265,6 +208,7 @@ enum CANMessage {
     ChangeState(PodStates)
 }
 
+#[derive(Debug)]
 enum UDPMessage {
     ConnectToHost(SocketAddr),
     StartupComplete,
@@ -300,17 +244,65 @@ pub fn run_threads() -> Result<(), Error> {
     std::thread::spawn(move || {
         // Setup
         let udp_socket = UdpSocket::bind("0.0.0.0:8888").expect("Unable to Bind to UDP Socket on port 8888");
+        udp_socket.set_read_timeout(Some(Duration::from_millis(1))).expect("Unable to set Read timeout for UDP Socket"); // TODO - Figure out what this value should be
 
         let mut server_state = ServerState::Startup;
 
+        let current_pod_state = PodStates::LowVoltage; // ************* Figure out what the initial Value for this should be
+        let next_pod_state = PodStates::LowVoltage; // ************* Figure out what the initial Value for this should be
+
+        let mut socket_buffer = [0u8; 256];
+        let mut errno = 0;
+
+        let get_message = || {
+            if let Ok(message) = udpReceiver.recv() {
+                message
+            } else {
+                // This should only happen if the channel closes. Which is a panic situation
+                panic!("Error Reading from UDP mpsc channel, Exiting");
+            }
+        };
+
         loop {
             match server_state {
-                ServerState::Disconnected => {},
-                ServerState::Connected => {},
+                ServerState::Disconnected => {
+                    match get_message() {
+                        UDPMessage::ConnectToHost(addr) => {
+                            if let Ok(_) = udp_socket.connect(addr) {
+                                server_state = ServerState::Connected;
+                            } else {
+                                println!("Unable to connect to {:?}", addr);
+                            }
+                        },
+                        message => {
+                            println!("Received Message on UDP mpsc channel while Disconnected: {:?}", message);
+                        }
+                    }
+                },
+                ServerState::Connected => {
+                    match udp_socket.recv(&mut socket_buffer) {
+                        Ok(bytes_received) => {
+                            if let Ok(desktop_state_message) = DesktopStateMessage::from_json_bytes(&socket_buffer) {
+                                if desktop_state_message.requested_state != current_pod_state && current_pod_state.can_transition_to(desktop_state_message.requested_state) {
+
+                                }
+                            } else {
+                                // TODO: This needs to change once we've figured out how we want to handle an error
+                                panic!("Failed to Read DesktopStateMessage in UDP Handler while in Connected State");
+                            }
+                        },
+                        Err(error) => {
+                            println!("Error: {:?}", error); // TODO: Figure out what error is returned for a timeout so that case can be handled separately
+                        }
+                    }
+                },
                 ServerState::Recovery => {},
                 ServerState::Startup => {
-                    if let Ok(message) = udpReceiver.recv() {
-
+                    match get_message() {
+                        UDPMessage::StartupComplete => { server_state = ServerState::Disconnected; },
+                        message => {
+                            println!("Received Message on UDP mpsc channel during Startup: {:?}", message);
+                        }
                     }
                 },
             }
