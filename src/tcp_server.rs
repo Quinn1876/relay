@@ -234,13 +234,21 @@ pub fn run_threads() -> Result<(), Error> {
     let (workerSender, workerReceiver): (Sender<WorkerMessage>, Receiver<WorkerMessage>) = channel();
     let (tcpSender, tcpReceiver): (Sender<TcpMessage>, Receiver<TcpMessage>) = channel();
 
+    // Configuration Values
+    let tcp_message_buffer_size = 128;
+    let can_interface = "can0";
+    // TODO - Figure out what these value should be
+    let udp_socket_read_timeout = Duration::from_millis(1); // Amount of time the UDP Socket will wait for a message from the Controller
+    let can_socket_read_timeout = Duration::from_millis(1); // Amount of time the CAN Socket will wait for a message from the rest of the POD
+    let udp_max_number_timeouts = 10;
+    // End Configuration Values
+
     // TCP Thread
     std::thread::spawn(move || {
         // Open and Bind to port 8080 TODO: Move into config
         let listener = TcpListener::bind("0.0.0.0:8080").expect("Should be able to connect");
         let mut request_parser = requests::RequestParser::new();
         initialize_request_parser(&mut request_parser);
-        let buffer_size = 128; // TODO: Move into Config
 
         let mut server_state = ServerState::Disconnected;
         udpSender.send(UDPMessage::StartupComplete).expect("Unable to send Message to UDP Thread to notify startup complete");
@@ -248,8 +256,8 @@ pub fn run_threads() -> Result<(), Error> {
         // accept connections and process them sequentially
         for stream in listener.incoming() {
             match stream {
-                Ok(stream) => handle_tcp_socket_event(stream, &request_parser, buffer_size, &udpSender, &mut server_state, &tcpReceiver).unwrap(),
-                Err(e) => println!("An Error Occured While Handling a TCP Conecction: {:?}", e),
+                Ok(stream) => handle_tcp_socket_event(stream, &request_parser, tcp_message_buffer_size, &udpSender, &mut server_state, &tcpReceiver).unwrap(),
+                Err(e) => println!("An Error Occurred While Handling a TCP Connection: {:?}", e),
             }
         }
     });
@@ -258,21 +266,18 @@ pub fn run_threads() -> Result<(), Error> {
     std::thread::spawn(move || {
         // Setup
         let udp_socket = UdpSocket::bind("0.0.0.0:8888").expect("Unable to Bind to UDP Socket on port 8888");
-        udp_socket.set_read_timeout(Some(Duration::from_millis(1))).expect("Unable to set Read timeout for UDP Socket"); // TODO - Figure out what this value should be
+        udp_socket.set_read_timeout(Some(udp_socket_read_timeout)).expect("Unable to set Read timeout for UDP Socket");
 
         let mut server_state = ServerState::Startup;
 
-        let mut current_pod_state = PodStates::LowVoltage; // ************* Figure out what the initial Value for this should be
-        let mut next_pod_state = PodStates::LowVoltage; // ************* Figure out what the initial Value for this should be
+        let mut current_pod_state = PodStates::LowVoltage; // *************  TODO Figure out what the initial Value for this should be
+        let mut next_pod_state = PodStates::LowVoltage; // ************* TODO Figure out what the initial Value for this should be
 
-        let mut socket_buffer = [0u8; 256];
         let mut errno = Errno::NoError;
         let mut timeout_counter = 0;
         let mut last_received_telemetry_timestamp = Utc::now().naive_local();
         let mut current_pod_data = PodData::new();
         let mut current_telemetry_timestamp = Utc::now().naive_local();
-
-        let max_timer_timeout = 10; // TODO Change this
 
         // BEGIN Section - Common Functions
         let get_udp_receiver_message_or_panic = || {
@@ -284,9 +289,14 @@ pub fn run_threads() -> Result<(), Error> {
             }
         };
 
+        let notify_recovery = || {
+            tcpSender.send(TcpMessage::EnteringRecovery).expect("To be able to notify tcp thread that we are entering recovery mode");
+        }
+
         let invalid_transition_recognized = |errno: &mut Errno, server_state: &mut ServerState| {
             *errno = Errno::InvalidTransitionRequest;
-            *server_state = ServerState::Recovery; // TODO: What other Threads need to know about this?
+            *server_state = ServerState::Recovery;
+            notify_recovery();
         };
 
         let handle_telemetry_timestamp = |last_received_telemetry_timestamp: &mut NaiveDateTime, timestamp: NaiveDateTime| {
@@ -301,6 +311,7 @@ pub fn run_threads() -> Result<(), Error> {
         // END Section - Common Functions
 
         'main_loop: loop {
+            let mut socket_buffer = [0u8; 256];
             match server_state {
                 ServerState::Disconnected => {
                     match get_udp_receiver_message_or_panic() {
@@ -361,8 +372,13 @@ pub fn run_threads() -> Result<(), Error> {
                             println!("Error: {:?}", error); // TODO: Figure out what error is returned for a timeout so that case can be handled separately
 
                             timeout_counter += 1; // Move this to the timeout  portion of the error handler
-                            if timeout_counter >= max_timer_timeout {
+                            if timeout_counter >= udp_max_number_timeouts
+                            {
                                 // TODO Enter into Recovery. Assume Desktop Disconnected
+                                notify_recovery();
+                                errno = Errno::ControllerTimeout;
+                                server_state = ServerState::Recovery;
+                                continue 'main_loop;
                             }
                         }
                     }
@@ -423,14 +439,13 @@ pub fn run_threads() -> Result<(), Error> {
      */
     std::thread::spawn(move || {
         // Initialization
-        let interface = "can0"; // TODO move to config
-        let socket = socketcan::CANSocket::open(interface).expect(&format!("Unable to Connect to CAN interface: {}", interface));
+        let socket = socketcan::CANSocket::open(interface).expect(&format!("Unable to Connect to CAN interface: {}", can_interface));
 
         let mut requested_pod_state = PodStates::LowVoltage;
         let mut bms_state = PodStates::LowVoltage;
         // TODO: IMPLE mc_state
 
-        socket.set_read_timeout(Duration::from_millis(1)).expect("Unable to Set Timeout on CAN Socket"); // TODO Move Duration into config
+        socket.set_read_timeout(can_socket_read_timeout).expect("Unable to Set Timeout on CAN Socket");
         loop {
             // poll read
             let response = socket.read_frame(); // with timeout
