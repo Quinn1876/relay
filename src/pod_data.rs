@@ -4,7 +4,7 @@ use json::{ JsonValue, object };
 // Desktop
 #[derive(Clone, Copy, Debug)]
 pub struct PodData {
-    speed: Option<i64>,
+    speed: Option<i32>,
 }
 
 impl PodData {
