@@ -1,24 +1,36 @@
-use json::{ JsonValue, object };
+use json::{ JsonValue, object, array };
 type TorchicData = [Option<f32>; 2];
 type PressureData = Option<f32>;
-// All Pod data will be optional. These values will be converted to null in the JSON that is sent to the
+
+// All Pod data will be optional. None values will be converted to null in the JSON that is sent to the
 // Desktop
 #[derive(Clone, Copy, Debug)]
 pub struct PodData {
-    speed: Option<i32>,
-    torchic_1: TorchicData,
-    torchic_2: TorchicData,
-    pressure_high: PressureData,
-    pressure_low_1: PressureData,
-    pressure_low_2: PressureData,
+    pub speed: Option<i32>,
+    pub torchic_1: TorchicData,
+    pub torchic_2: TorchicData,
+    pub pressure_high: PressureData,
+    pub pressure_low_1: PressureData,
+    pub pressure_low_2: PressureData,
 }
+
+trait JsonHelper {
+    fn to_json(&self) -> JsonValue;
+}
+
+impl JsonHelper for TorchicData {
+    fn to_json(&self) -> JsonValue {
+        array![self[0], self[1]]
+    }
+}
+
 
 impl PodData {
     pub fn to_json(&self) -> JsonValue {
         object!{
             speed: self.speed,
-            torchic_1: self.torchic_1,
-            torchic_2: self.torchic_2,
+            torchic_1: self.torchic_1.to_json(),
+            torchic_2: self.torchic_2.to_json(),
             pressure_high: self.pressure_high,
             pressure_low_1: self.pressure_low_1,
             pressure_low_2: self.pressure_low_2

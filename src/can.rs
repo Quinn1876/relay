@@ -8,6 +8,7 @@ use socketcan::CANSocket;
 use std::fs;
 use polling::{ Event, Poller };
 use std::io;
+use byteorder::{ LittleEndian, ByteOrder };
 
 use crate::pod_states::PodStates;
 
@@ -63,6 +64,11 @@ fn _run(config: Config) -> Result<(), Error> {
 pub enum CanCommand {
     BmsHealthCheck { battery_pack_current: u32, cell_temperature: u32 },
     BmsStateChange(PodStates),
+    PressureHigh(f32),
+    PressureLow1(f32),
+    PressureLow2(f32),
+    Torchic1([Option<f32>; 2]),
+    Torchic2([Option<f32>; 2]),
     Unknown(u32), // Arbitration ID provided for debugging Purposes
 }
 
@@ -83,6 +89,7 @@ impl FrameHandler for socketcan::CANFrame {
 
         match id {
             0x00B => CanCommand::BmsStateChange(get_state_change_data(data)),
+            0x040 => CanCommand::Torchic1(get_torchic_data(data)),
             id => CanCommand::Unknown(id)
         }
     }
@@ -102,3 +109,10 @@ fn get_state_change_data(data: &[u8]) -> PodStates {
     else { PodStates::from_byte(data[0]) }
 }
 
+/**
+ * @func get_torchic_data
+ * @brief Torchic frames consist of 2 4-byte floats containing temperature data
+ */
+fn get_torchic_data(data: &[u8]) -> [Option<f32>; 2] {
+    [Some(LittleEndian::read_f32(&[data[0], data[1], data[2], data[3]])), Some(LittleEndian::read_f32(&[data[4], data[5], data[6], data[7]]))]
+}
