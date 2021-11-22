@@ -1,14 +1,42 @@
-use polling::{ Event, Poller, Source };
-use socketcan::CANSocket;
-use std::time::Duration;
-use std::net::{ TcpListener, TcpStream, IpAddr, Ipv4Addr, SocketAddr, UdpSocket };
-use std::io::prelude::*;
-use std::sync::Arc;
-use json::object;
+#[allow(unused_doc_comments)]
 
+use std::time::Duration;
+use std::net::{
+    TcpListener,
+    TcpStream,
+    IpAddr,
+    Ipv4Addr,
+    SocketAddr,
+    UdpSocket
+};
+use std::io::prelude::*;
+use std::sync::{
+    mpsc::{
+        channel,
+        Receiver,
+        Sender
+    }
+};
+use std::time::SystemTime;
+
+use json::{
+    object,
+    number::Number
+};
+use chrono::{ NaiveDateTime, Utc };
+use polling::{ Event, Poller };
+use socketcan::{ CANSocket, ShouldRetry, CANFrame };
+
+
+use crate::roboteq::Roboteq;
 use crate::requests;
 use crate::stream_utils;
 use crate::can;
+use crate::can::{CanCommand, FrameHandler};
+use crate::udp_messages::{ DesktopStateMessage, Errno, CustomUDPSocket };
+use crate::udp_messages;
+use crate::pod_states::PodStates;
+use crate::pod_data::PodData;
 
 #[cfg(test)]
 mod test {
@@ -132,9 +160,9 @@ impl Config<SocketAddr> {
 
 #[derive(Copy, Clone, Debug)]
 enum RequestTypes {
-    Handshake,
-    Unknown,
-    MockCAN
+    Connect,
+    Disconnect,
+    Unknown
 }
 
 #[derive(Debug)]
@@ -150,343 +178,449 @@ pub enum Error {
     AddrParseError,
 }
 
-struct PollKeys {
-    tcp_socket: usize,
-    udp_socket: usize,
-    can_socket: usize,
-    tcp_stream: usize,
-}
-
-#[derive(PartialEq)]
+#[derive(PartialEq, Copy, Clone)]
 enum ServerState {
     Startup,
     Disconnected,
-    UdpCanPassThrough,
+    Connected,
+    Recovery
 }
 
-enum PollType {
-    Add,
-    Modify
+
+#[derive(Debug)]
+pub enum CanError {
+    MessageError(socketcan::ConstructionError),
+    WriteError(std::io::Error)
 }
 
-pub struct Server<A: std::net::ToSocketAddrs> {
-    keys: PollKeys,
-    tcp_socket: Option<TcpListener>,
-    udp_socket: Option<Arc<UdpSocket>>,
-    can_socket: Option<socketcan::CANSocket>,
-    tcp_stream: Option<TcpStream>,
-    socket_poller: Poller,                      // Socket poller is our interface to listen to the os to tell us when io (sockets) are ready
-    current_state: ServerState,
-    config: Config<A>,
-    request_parser: requests::RequestParser::<RequestTypes>,
+// START TODO: Move Section to own file
+trait RelayCan {
+    fn send_pod_state(&self, state: &PodStates) -> Result<(), CanError>;
 }
 
-impl<A: std::net::ToSocketAddrs> Server<A> {
-    pub fn new(config: Config<A>) -> Server<A> {
-        Server {
-            keys: PollKeys {
-                tcp_socket: 1,
-                udp_socket: 2,
-                can_socket: 3,
-                tcp_stream: 4
-            },
-            current_state: ServerState::Startup,
-            can_socket: None,
-            tcp_socket: None,
-            tcp_stream: None,
-            udp_socket: None,
-            socket_poller: Poller::new().expect("Unable to create Poller"),
-            config,
-            request_parser: requests::RequestParser::new(),
-        }
+impl RelayCan for CANSocket {
+    fn send_pod_state(&self, state: &PodStates) -> Result<(), CanError> {
+        self.write_frame_insist(
+            &CANFrame::new(0, &[state.to_byte()], false, false).map_err(|e| CanError::MessageError(e))?
+        ).map_err(|e| CanError::WriteError(e))
     }
+}
+// END Section
 
-    pub fn run_poll(&mut self) -> Result<(), Error> {
-        if self.current_state != ServerState::Startup {
-            return Err(Error::InvalidState("run poll called on a running server"));
-        }
+// Describes a message that can be sent to the CAN thread
+enum CANMessage {
+    ChangeState(PodStates)
+}
 
-        if self.tcp_socket.is_some() {
-            return Err(Error::InvalidState("tcp socket is initialized before entering initialization"))
-        }
+#[derive(Debug)]
+enum UDPMessage {
+    ConnectToHost(SocketAddr),
+    StartupComplete,
+    PodStateChanged(PodStates),
+    TelemetryDataAvailable(PodData, NaiveDateTime)
+}
 
-        self.initialize_tcp_socket()?;
-        self.intialize_request_parser();
+enum WorkerMessage {
+    CanFrameAndTimeStamp(CANFrame, NaiveDateTime)
+}
 
-        let mut addr = self.config.address.to_socket_addrs().map_err(|e| Error::InvalidAddr(e))?.next().ok_or(Error::AddrParseError)?;
-        addr.set_port(8888);
-        self.open_udp_socket(addr)?;
-        self.open_can_socket()?;
+enum TcpMessage {
+    EnteringRecovery,
+    RecoveryComplete,
+}
 
-        let (sender, receiver): (std::sync::mpsc::Sender<socketcan::CANFrame>, std::sync::mpsc::Receiver<socketcan::CANFrame>) = std::sync::mpsc::channel();
-        {
+pub fn run_threads() -> Result<(), Error> {
+    let (udpSender, udpReceiver): (Sender<UDPMessage>, Receiver<UDPMessage>) = channel();
+    let (canSender, canReceiver): (Sender<CANMessage>, Receiver<CANMessage>) = channel();
+    let (workerSender, workerReceiver): (Sender<WorkerMessage>, Receiver<WorkerMessage>) = channel();
+    let (tcpSender, tcpReceiver): (Sender<TcpMessage>, Receiver<TcpMessage>) = channel();
 
-            let udp_socket = self.udp_socket.as_ref().expect("Udp Socket should be initialized by this point").clone();
-            // START CAN FRAME HANDLER -> TODO Move this somewhere else =============================
-            std::thread::spawn(move || loop {
-                // When the sender goes out of scope, this call will fail and the thread will close
-                let frame = receiver.recv().unwrap();
-                if frame.is_error() {
-                    println!("Frame Error Received");
-                } else {
-                    // TODO - Better Structure here including data translation and not just forwarding as json
-                    let packet = object!{
-                        id: frame.id(),
-                        data: frame.data(),
-                    };
-                    match udp_socket.send(packet.dump().as_bytes()) {
-                        Ok(bytes_written) => println!("Send {} bytes on udp", bytes_written),
-                        Err(e) => println!("Error sending bytes: {:?}", e),
-                    }
-                }
-            });
-            // END CAN FRAME HANDLER ================================================================
-        }
+    // Configuration Values
+    let tcp_message_buffer_size = 128;
+    let can_interface = "can0";
+    // TODO - Figure out what these value should be
+    let udp_socket_read_timeout = Duration::from_millis(1); // Amount of time the UDP Socket will wait for a message from the Controller
+    let can_socket_read_timeout = Duration::from_millis(1); // Amount of time the CAN Socket will wait for a message from the rest of the POD
+    let udp_max_number_timeouts = 10;
+    // End Configuration Values
 
+    // TCP Thread
+    {
+        let udpSender = udpSender.clone(); // Clone before moving into thread
+        std::thread::spawn(move || {
+            // Open and Bind to port 8080 TODO: Move into config
+            let listener = TcpListener::bind("0.0.0.0:8080").expect("Should be able to connect");
+            let mut request_parser = requests::RequestParser::new();
+            initialize_request_parser(&mut request_parser);
 
-        self.poll_tcp_socket(PollType::Add)?;
-        self.poll_can_socket(PollType::Add)?;
-        self.poll_udp_socket(PollType::Add)?;
-        self.current_state = ServerState::Disconnected;
+            let mut server_state = ServerState::Disconnected;
+            udpSender.send(UDPMessage::StartupComplete).expect("Unable to send Message to UDP Thread to notify startup complete");
 
-        let mut events = Vec::new();
-        loop {
-            events.clear();
-            self.poller_wait(&mut events, None)?;
-
-            for event in &events {
-                if event.key == self.keys.tcp_socket {
-                    self.handle_tcp_socket_event(event)?;
-                    self.poll_tcp_socket(PollType::Modify)?;
-                } else if event.key == self.keys.udp_socket {
-                    println!("UDP Message Received: {:?}", self.read_udp()?);
-                    let frame = socketcan::CANFrame::new(0, b"test", false, false).map_err(|e| Error::InvalidState("Failed to make a frame"))?;
-                    sender.send(frame).unwrap();
-                    self.poll_udp_socket(PollType::Modify)?;
-                } else if event.key == self.keys.can_socket {
-                    sender.send(self.get_can_frame()?).unwrap();
-                    self.poll_can_socket(PollType::Modify)?;
+            // accept connections and process them sequentially
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(stream) => handle_tcp_socket_event(stream, &request_parser, tcp_message_buffer_size, &udpSender, &mut server_state, &tcpReceiver).unwrap(),
+                    Err(e) => println!("An Error Occurred While Handling a TCP Connection: {:?}", e),
                 }
             }
-        }
-
+        });
     }
+    // UDP Thread
+    std::thread::spawn(move || {
+        // Setup
+        let udp_socket = UdpSocket::bind("0.0.0.0:8888").expect("Unable to Bind to UDP Socket on port 8888");
+        udp_socket.set_read_timeout(Some(udp_socket_read_timeout)).expect("Unable to set Read timeout for UDP Socket");
 
-    /**
-     * poll_*_socket
-     * There are two values for these functions, either add or modify.
-     * The first time the user would like to begin polling, the socket must be "added"
-     * After each event received, the socket ust be repolled with a "Modify" call
-     */
-    // START poll_*_socket functions
-    fn poll_tcp_socket(&self, poll_type: PollType) -> Result<(), Error> {
-        match poll_type {
-            PollType::Add => self.socket_poller.add(self.tcp_socket.as_ref().unwrap(), Event::readable(self.keys.tcp_socket)).map_err(|e| Error::PollerError(e)),
-            PollType::Modify => self.socket_poller.modify(self.tcp_socket.as_ref().unwrap(), Event::readable(self.keys.tcp_socket)).map_err(|e| Error::PollerError(e))
-        }
-    }
+        let mut server_state = ServerState::Startup;
 
-    fn poll_udp_socket(&self, poll_type: PollType) -> Result<(), Error> {
-        match poll_type {
-            PollType::Add => self.socket_poller.add(&self.udp_socket.as_ref().unwrap() as &std::net::UdpSocket, Event::readable(self.keys.udp_socket)).map_err(|e| Error::PollerError(e)),
-            PollType::Modify => self.socket_poller.modify(&self.udp_socket.as_ref().unwrap() as &std::net::UdpSocket, Event::readable(self.keys.udp_socket)).map_err(|e| Error::PollerError(e))
-        }
-    }
+        let mut current_pod_state = PodStates::LowVoltage; // *************  TODO Figure out what the initial Value for this should be
+        let mut next_pod_state = PodStates::LowVoltage; // ************* TODO Figure out what the initial Value for this should be
 
-    fn poll_can_socket(&self, poll_type: PollType) -> Result<(), Error> {
-        match poll_type {
-            PollType::Add => self.socket_poller.add(self.can_socket.as_ref().unwrap(), Event::readable(self.keys.can_socket)).map_err(|e| Error::PollerError(e)),
-            PollType::Modify => self.socket_poller.modify(self.can_socket.as_ref().unwrap(), Event::readable(self.keys.can_socket)).map_err(|e| Error::PollerError(e))
-        }
-    }
-    // END OF poll_*_socket functions
+        let mut errno = Errno::NoError;
+        let mut timeout_counter = 0;
+        let mut last_received_telemetry_timestamp = Utc::now().naive_local();
+        let mut current_pod_data = PodData::new();
+        let mut current_telemetry_timestamp = Utc::now().naive_local();
 
+        // BEGIN Section - Common Functions
+        let get_udp_receiver_message_or_panic = || {
+            if let Ok(message) = udpReceiver.recv() {
+                message
+            } else {
+                // This should only happen if the channel closes. Which is a panic situation
+                panic!("Error Reading from UDP mpsc channel, Exiting");
+            }
+        };
 
-    fn poller_wait(&self, events: &mut Vec<Event>, timeout: Option<Duration>) -> Result<usize, Error> {
-        self.socket_poller.wait(events, timeout).map_err(|e| Error::PollerError(e))
-    }
+        let notify_recovery = || {
+            tcpSender.send(TcpMessage::EnteringRecovery).expect("To be able to notify tcp thread that we are entering recovery mode");
+        };
 
-    fn initialize_tcp_socket(&mut self) -> Result<(), Error> {
-        self.tcp_socket = Some(TcpListener::bind(&self.config.address).map_err(|e| Error::TcpSocketError(e))?);
-        self.tcp_socket.as_ref().unwrap().set_nonblocking(true).map_err(|e| Error::TcpSocketError(e))?; // TCP Socket neesd to be non_blocking so that it can be polled
-        println!("Listening on {}", self.tcp_socket.as_ref().unwrap().local_addr().ok().unwrap());
-        Ok(())
-    }
+        let invalid_transition_recognized = |errno: &mut Errno, server_state: &mut ServerState| {
+            *errno = Errno::InvalidTransitionRequest;
+            *server_state = ServerState::Recovery;
+            notify_recovery();
+        };
 
-    fn intialize_request_parser(&mut self) {
-        /*
-        * Add Supported TCP Queries here
-        * Each Query string will correspond to a RequestType
-        * Each Request Type will have a corresponding handler function which is ran
-        * when the match occurs
-        */
-        self.request_parser.insert("HANDSHAKE\r\n", RequestTypes::Handshake);
-        self.request_parser.insert("SEND MOCK CAN\r\n", RequestTypes::MockCAN);
-        self.request_parser.insert("@@Failed@@\r\n", RequestTypes::Unknown); // Special Message which is written into the request in the event of an error reading the message
-    }
+        let handle_telemetry_timestamp = |last_received_telemetry_timestamp: &mut NaiveDateTime, timestamp: NaiveDateTime| {
+            *last_received_telemetry_timestamp = timestamp;
+        };
 
-    fn open_udp_socket<Addr: std::net::ToSocketAddrs>(&mut self, addr: Addr) -> Result<(), Error> {
-        self.udp_socket = Some(Arc::new(UdpSocket::bind(addr).map_err(|e| Error::UdpSocketError(e))?));
-        self.udp_socket.as_ref().unwrap().set_nonblocking(true).map_err(|e| Error::UdpSocketError(e))?;
-        Ok(())
-    }
+        let trigger_transition_to_new_state = |next_pod_state: &mut PodStates, requested_state: PodStates| {
+            canSender.send(CANMessage::ChangeState(requested_state.clone())).expect("Should be able to Send a message to the Can thread from the UDP thread");
+            *next_pod_state = requested_state;
+        };
 
-    fn open_can_socket(&mut self) -> Result<(), Error> {
-        self.can_socket = Some(can::open_socket(&self.config.can_config).map_err(|e| Error::CanSocketError(e))?);
-        self.can_socket.as_ref().unwrap().set_nonblocking(true).map_err(|e| Error::CanSocketError(can::Error::UnableToSetNonBlocking(e)))?;
-        Ok(())
-    }
+        // END Section - Common Functions
 
-
-    /**
-     * @func handle_tcp_socket_event
-     * @brief
-     */
-    fn handle_tcp_socket_event(&mut self, _event: &Event) -> Result<(), Error> {
-        if let Some(tcp_socket) = &self.tcp_socket {
-            match tcp_socket.accept() {
-                Ok((mut stream, mut addr)) => {
-                    println!("Connected to a new stream with addr: {}", addr);
-                    let request = stream_utils::read_all(&mut stream, self.config.buffer_size).unwrap_or(b"@@Failed@@\r\n".to_vec());
-                    println!("Request: \n{}", std::str::from_utf8(&request).unwrap());
-                    /* Remove the Query String from the request and match it to the associated handler function */
-                    match self.request_parser.strip_line_and_get_value(request.as_slice()) {
-                        requests::RequestParserResult::Success((&value, request)) => {
-                            println!("Value: {:?}", value);
-                            match value {
-                                RequestTypes::Handshake => {
-                                    println!("HandShake received");
-                                    addr.set_port(8888);
-                                    self.udp_socket.as_ref().unwrap().connect(addr).map_err(|e| Error::UdpSocketError(e))?; // Connect to the desktop to send it messages over udp
-                                    stream.write(b"8888").map_err(|e| Error::TcpSocketError(e))?; // Tell the Handshake requester what udp port to listen on
-                                },
-                                RequestTypes::MockCAN => {
-                                    println!("Send Mock Can Received");
-                                    handle_mock_can(request, &mut stream).unwrap();
-                                },
-                                RequestTypes::Unknown => {
-                                    println!("Received a Malformed Input");
-                                }
-                                _ => ()
+        'main_loop: loop {
+            let mut socket_buffer = [0u8; 256];
+            match server_state {
+                ServerState::Disconnected => {
+                    match get_udp_receiver_message_or_panic() {
+                        UDPMessage::ConnectToHost(addr) => {
+                            if let Ok(_) = udp_socket.connect(addr) {
+                                server_state = ServerState::Connected;
+                            } else {
+                                println!("Unable to connect to {:?}", addr);
                             }
                         },
-                        requests::RequestParserResult::InvalidRequest => {
-                            println!("Invalid Request Received");
-                        },
-                        _ => ()
-                    };
+                        message => {
+                            println!("Received Message on UDP mpsc channel while Disconnected: {:?}", message);
+                        }
+                    }
                 },
-                Err(e) => return Err(Error::TcpSocketError(e))
+                ServerState::Connected => {
+                    match udp_socket.recv(&mut socket_buffer) {
+                        Ok(bytes_received) => {
+                            // When the POD Enters an Error State, we no longer need to follow the decision tree
+                            // for where or not we can transition to a new state etc. The Only Goal For Error State is
+                            // to hopefully keep the Rpi connected to the desktop long enough to tell the desktop that
+                            // A failure was found and that the pod is working to shut down
+                            if !current_pod_state.is_error_state() {
+                                if let Ok(desktop_state_message) = DesktopStateMessage::from_json_bytes(&socket_buffer) {
+                                    if desktop_state_message.requested_state == current_pod_state {
+                                        if next_pod_state == current_pod_state {
+                                            handle_telemetry_timestamp(&mut last_received_telemetry_timestamp, desktop_state_message.most_recent_timestamp);
+                                        } else {
+                                            invalid_transition_recognized(&mut errno, &mut server_state);
+                                            continue 'main_loop;
+                                        }
+                                    } else {
+                                        if current_pod_state.can_transition_to(&desktop_state_message.requested_state) {
+                                            if desktop_state_message.requested_state == next_pod_state {
+                                                handle_telemetry_timestamp(&mut last_received_telemetry_timestamp, desktop_state_message.most_recent_timestamp);
+                                            } else {
+                                                if current_pod_state == next_pod_state {
+                                                    trigger_transition_to_new_state(&mut next_pod_state, desktop_state_message.requested_state);
+                                                    handle_telemetry_timestamp(&mut last_received_telemetry_timestamp, desktop_state_message.most_recent_timestamp);
+                                                } else {
+                                                    invalid_transition_recognized(&mut errno, &mut server_state);
+                                                    continue 'main_loop;
+                                                }
+                                            }
+                                        } else {
+                                            invalid_transition_recognized(&mut errno, &mut server_state);
+                                            continue 'main_loop;
+                                        }
+                                    }
+                                } else {
+                                    // TODO: This needs to change once we've figured out how we want to handle an error
+                                    panic!("Failed to Read DesktopStateMessage in UDP Handler while in Connected State");
+                                }
+                                timeout_counter = 0;
+                            }
+                        },
+                        Err(error) => {
+                            println!("Error: {:?}", error); // TODO: Figure out what error is returned for a timeout so that case can be handled separately
+
+                            timeout_counter += 1; // Move this to the timeout  portion of the error handler
+                            if timeout_counter >= udp_max_number_timeouts
+                            {
+                                // TODO Enter into Recovery. Assume Desktop Disconnected
+                                notify_recovery();
+                                errno = Errno::ControllerTimeout;
+                                server_state = ServerState::Recovery;
+                                continue 'main_loop;
+                            }
+                        }
+                    }
+                    // Check for new Messages from other threads
+                    while let Ok(message) = udpReceiver.try_recv() {
+                        match message {
+                            UDPMessage::PodStateChanged(newState) => {
+                                if newState.is_error_state() {
+                                    errno = Errno::GeneralPodFailure;
+                                }
+                                current_pod_state = newState;
+                            },
+                            UDPMessage::TelemetryDataAvailable(newData, timestamp) => {
+                                current_pod_data = newData;
+                                current_telemetry_timestamp = timestamp;
+                            },
+                            unrecognized_message => {
+                                panic!("UnExpected Message Received on UDP mpsc channel while in Connected State: {:?}", unrecognized_message);
+                            }
+                        }
+                    }
+                    // Send Message Back to Desktop
+                    let pod_state_message = if current_telemetry_timestamp.timestamp() > last_received_telemetry_timestamp.timestamp() {
+                        udp_messages::PodStateMessage::new(current_pod_state, next_pod_state, errno, &current_pod_data, current_telemetry_timestamp, matches!(server_state, ServerState::Recovery))
+                    } else {
+                        udp_messages::PodStateMessage::new_no_telemetry(current_pod_state, next_pod_state, errno, current_telemetry_timestamp, matches!(server_state, ServerState::Recovery))
+                    };
+                    udp_socket.send_pod_state_message(&pod_state_message);
+                },
+                ServerState::Recovery => {},
+                ServerState::Startup => {
+                    match get_udp_receiver_message_or_panic() {
+                        UDPMessage::StartupComplete => {
+                            server_state = ServerState::Disconnected;
+                        },
+                        message => {
+                            println!("Received Message on UDP mpsc channel during Startup: {:?}", message);
+                        }
+                    }
+                },
             }
         }
-        Ok(())
+    });
+
+    #[allow(unused_doc_comments)]
+    /**
+     * @thread CAN Thread
+     *
+     * @desc The CAN thread is responsible for reading and writing to the CAN bus
+     *       The CAN Thread tracks the time that a message is received and passes along
+     *          can frames and their timestamp to the worker thread
+     *      The Message that the CAN Frame sends depends on the state of the <Relay Board, Pod>:
+     *          <Connected, AutoPilot>: Send Roboteq Throttle message
+     *          <Connected, NotAutoPilot>: Send StateID
+     *          <Disconnected, LowVoltage>: Send StateID
+     *          <Recovery, *>: Send StateID
+     *
+     */
+    {
+        let udpSender = udpSender.clone();
+        std::thread::spawn(move || {
+            // Initialization
+            let socket = socketcan::CANSocket::open(can_interface).expect(&format!("Unable to Connect to CAN interface: {}", can_interface));
+
+            let mut requested_pod_state = PodStates::LowVoltage;
+            let mut bms_state = PodStates::LowVoltage;
+            // TODO: IMPLE mc_state
+
+            socket.set_read_timeout(can_socket_read_timeout).expect("Unable to Set Timeout on CAN Socket");
+            loop {
+                // poll read
+                let response = socket.read_frame(); // with timeout
+                if response.should_retry() {
+                    // Timeout with no message
+                    println!("CAN SOCKET: Read timeout no message Received");
+                } else if let Ok(frame) = response {
+                    // Frame Received
+                    // Check for state messages before passing the frame on to the worker
+                    if let CanCommand::BmsStateChange(newState) = frame.get_command() {
+                        bms_state = newState;
+                        udpSender.send(UDPMessage::PodStateChanged(newState)).expect("To Be able to send message to udp from can");
+                    }
+                    workerSender.send(WorkerMessage::CanFrameAndTimeStamp(frame, Utc::now().naive_local())).expect("Unable to send message from CAN Thread on Worker Channel");
+                } else {
+                    // ERROR Reading from Can socket
+                }
+
+                // check for state message from udp
+                if let Ok(message) = canReceiver.try_recv() {
+                    match message {
+                        CANMessage::ChangeState(new_state) => {
+                            requested_pod_state = new_state;
+                        }
+                    }
+                }
+
+                let message_result;
+                if requested_pod_state == bms_state && requested_pod_state == PodStates::AutoPilot {
+                    message_result = socket.set_motor_throttle(1, 1, 100); // TODO move this into config
+                } else {
+                    message_result = socket.send_pod_state(&requested_pod_state);
+                }
+
+                match message_result {
+                    Ok(()) => {},
+                    Err(err) => {
+                        println!("Error Sending Message on CAN bus: {:?}",  err);
+                    }
+                }
+            }
+        });
     }
 
-    fn get_can_frame(&mut self) -> Result<socketcan::CANFrame, Error> {
-        match self.can_socket.as_ref() {
-            Some(can_socket) => {
-                Ok(can_socket.read_frame().map_err(|e| Error::CanSocketError(can::Error::ReadError(e)))?)
+    // Worker Thread
+    // Initialization
+    let mut pod_data = PodData::new();
+    loop {
+        match workerReceiver.recv() {
+            Ok(message) => {
+                match message {
+                    WorkerMessage::CanFrameAndTimeStamp(frame, time) => {
+                        // Handle CAN Frame in here
+                        let mut new_data = true;
+                        match frame.get_command() {
+                            CanCommand::BmsHealthCheck{ battery_pack_current, cell_temperature } => {},
+                            CanCommand::PressureHigh(pressure) => pod_data.pressure_high = Some(pressure),
+                            CanCommand::PressureLow1(pressure) => pod_data.pressure_low_1 = Some(pressure),
+                            CanCommand::PressureLow2(pressure) => pod_data.pressure_low_2 = Some(pressure),
+                            CanCommand::Torchic1(data) => pod_data.torchic_1 = data,
+                            CanCommand::Torchic2(data) => pod_data.torchic_2 = data,
+                            _ => {
+                                new_data = false;
+                            }
+                        }
+                        if new_data {
+                            udpSender.send(UDPMessage::TelemetryDataAvailable(pod_data, time)).expect("To be able to send telemetry data to udp from worker");
+                        }
+                    }
+                }
             },
-            None => Err(Error::UninitializedCanSocket)
-        }
-    }
-
-    fn read_udp(&mut self) -> Result<Vec<u8>, Error> {
-        match self.udp_socket.as_ref() {
-            Some(udp_socket) => {
-                let mut buffer = [0u8; 256];
-                let (amount, src) = udp_socket.recv_from(&mut buffer).map_err(|e| Error::UdpSocketError(e))?;
-                // TODO: LOG Events
-                Ok(buffer.to_vec())
-            },
-            None => Err(Error::UninitializedUdpSocket)
-        }
-    }
-    fn write_udp(&mut self, msg: &[u8], dest: std::net::SocketAddr) -> Result<(), Error> {
-        match self.udp_socket.as_ref() {
-            Some(udp_socket) => {
-                udp_socket.send_to(msg, dest).map_err(|e| Error::UdpSocketError(e))?;
-                // TODO: Log Event
-                Ok(())
-            },
-            None => Err(Error::UninitializedUdpSocket)
+            Err(err) => {
+                println!("Worker Receiver Error: {:?}", err);
+                println!("Exiting");
+                return Ok(());
+            }
         }
     }
 }
 
+fn initialize_request_parser(request_parser: &mut requests::RequestParser<RequestTypes>) {
+    /*
+    * Add Supported TCP Queries here
+    * Each Query string will correspond to a RequestType
+    * Each Request Type will have a corresponding handler function which is ran
+    * when the match occurs
+    */
+    request_parser.insert("CONNECT\r\n", RequestTypes::Connect);
+    request_parser.insert("DISCONNECT\r\n", RequestTypes::Disconnect);
+    request_parser.insert("@@Failed@@\r\n", RequestTypes::Unknown); // Special Message which is written into the request in the event of an error reading the message
+}
+
+trait CustomTcpStream {
+    fn write_message(&mut self, buf: &[u8]) -> Result<usize, Error>;
+}
+
+impl CustomTcpStream for TcpStream {
+    fn write_message(&mut self, buf: &[u8]) -> Result<usize, Error> {
+        self.write(buf).map_err(|e| Error::TcpSocketError(e))
+    }
+}
 
 /**
- * @func handle_handshake
- * @param _request: This is the body of the request
- * @param stream: Tcp stream, can be written to and read from
- *
- * @brief: This is the main function for running the POD
- * A UDP port is bound and watched for information coming from the
- * controller
- * Once opened, the controller is notified of the port to begin sending to
- * over the tcp stream.
- *
- * TODO: Interface with the Can Board to retrieve CAN Packets to send to the controller
- * TODO: Interface with the CAN Board to send CAN packets with information from the controller
+ * @func handle_tcp_socket_event
+ * @brief
  */
-fn handle_handshake(_request: &[u8], stream: &mut TcpStream, can_config: & can::Config) -> Result<(), Error> {
+fn handle_tcp_socket_event(
+    mut stream: TcpStream,
+    request_parser: &requests::RequestParser<RequestTypes>,
+    buffer_size: usize,
+    udp_sender: &Sender<UDPMessage>,
+    server_state: &mut ServerState,
+    tcp_receiver: &Receiver<TcpMessage>
+) -> Result<(), Error> {
+    let mut addr = stream.peer_addr().map_err(|e| Error::TcpSocketError(e))?;
+    println!("Connected to a new stream with addr: {}", addr);
+    let request = stream_utils::read_all(&mut stream, buffer_size).unwrap_or(b"@@Failed@@\r\n".to_vec());
+    println!("Request: \n{}", std::str::from_utf8(&request).unwrap());
 
-    let mut addr = stream.local_addr().map_err(|e| Error::UdpSocketError(e))?;
-    addr.set_port(8888);
-
-    let udp_socket = UdpSocket::bind(addr).map_err(|e| Error::UdpSocketError(e))?;
-    let mut can_socket = can::open_socket(can_config).map_err(|e| Error::CanSocketError(e))?;
-
-    let udp_key = 0;
-    let can_key = 1;
-
-    let socket_poller = Poller::new().map_err(|e| Error::PollerError(e))?;
-    socket_poller.add(&can_socket, Event::readable(can_key)).map_err(|e| Error::PollerError(e))?;
-    socket_poller.add(&udp_socket, Event::readable(udp_key)).map_err(|e| Error::PollerError(e))?;
-
-
-    println!("Bound to udpSocket {}", addr);
-    stream.write(b"8888").map_err(|e| Error::UdpSocketError(e))?; // Tell the Handshake requester what port to listen on
-
-    let mut events = Vec::new();
-    loop {
-        events.clear();
-        socket_poller.wait(&mut events, None).map_err(|e| Error::PollerError(e))?;
-
-        for event in &events {
-            if event.key == udp_key {
-                let mut buffer = [0u8; 256];
-                let (amount, src) = udp_socket.recv_from(&mut buffer).map_err(|e| Error::UdpSocketError(e))?;
-                println!("UDP Packet: {}", String::from_utf8(buffer.to_vec()).unwrap());
-
-                socket_poller.modify(&udp_socket, Event::readable(udp_key)).map_err(|e| Error::PollerError(e))?;
-            }
-            else if event.key == can_key {
-                let frame = can_socket.read_frame().unwrap();
-                println!("Frame: {:?}", frame);
-                socket_poller.modify(&can_socket, Event::readable(can_key)).map_err(|e| Error::PollerError(e))?;
-            }
+    // Handle any Messages from the other threads before Handling the Connection
+    while let Ok(message) = tcp_receiver.try_recv() {
+        match message {
+            TcpMessage::EnteringRecovery => *server_state = ServerState::Recovery,
+            TcpMessage::RecoveryComplete => *server_state = ServerState::Disconnected,
         }
     }
-}
 
-
-fn handle_mock_can(_request: &[u8], stream: &mut TcpStream) -> std::io::Result<()> {
-    let mut addr = stream.local_addr()?;
-    addr.set_port(8888);
-    let udp_socket = UdpSocket::bind(addr)?;
-    println!("Bound to udpSocket {}", addr);
-    stream.write(b"8888")?; // Tell the Handshake requester what port to listen on
-
-    let mut buffer = [0u8; 256];
-
-    let (_amount, src) = udp_socket.recv_from(&mut buffer)?;
-
-    for _i in 0..7 {
-        let buf = [b'B', b'M', b'S', b'1', b'\r', b'\n', 100u8];
-        udp_socket.send_to(&buf, src)?;
-    }
-
+    let mut new_state = *server_state;
+    /* Remove the Query String from the request and match it to the associated handler function */
+    match request_parser.strip_line_and_get_value(request.as_slice()) {
+        requests::RequestParserResult::Success((&value, _request)) => {
+            match value {
+                RequestTypes::Connect => {
+                    println!("Connection Attempt received");
+                    match server_state {
+                        ServerState::Disconnected => {
+                            addr.set_port(8888);
+                            udp_sender.send(UDPMessage::ConnectToHost(addr)).expect("Should be able to send Message to UDP Socket from TCP Socket");
+                            stream.write_message(b"OK 8888")?; // Tell the Handshake requester what udp port to listen on
+                            new_state = ServerState::Connected;
+                        },
+                        ServerState::Connected => {
+                            stream.write_message(b"ERROR POD Already Connected to Controller")?;
+                        },
+                        ServerState::Startup => {
+                            panic!("TCP Socket should not be accepting connections in the Startup State")
+                        },
+                        ServerState::Recovery => {
+                            stream.write_message(b"ERROR Unable to Connect to Pod while recovering. Please Wait for recovery to finish");
+                        }
+                    }
+                },
+                RequestTypes::Disconnect => {
+                    println!("Disconnect Received");
+                    todo!()
+                },
+                RequestTypes::Unknown => {
+                    println!("Received a Malformed Input");
+                }
+                _ => {
+                    println!("RequestTypeParsed: {:?}", value);
+                }
+            }
+        },
+        requests::RequestParserResult::InvalidRequest => {
+            println!("Invalid Request Received");
+        },
+        _ => ()
+    };
+    *server_state = new_state;
     Ok(())
 }
 
