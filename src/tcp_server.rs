@@ -178,7 +178,7 @@ pub enum Error {
     AddrParseError,
 }
 
-#[derive(PartialEq, Copy, Clone)]
+#[derive(PartialEq, Copy, Clone, Debug)]
 enum ServerState {
     Startup,
     Disconnected,
@@ -239,8 +239,8 @@ pub fn run_threads() -> Result<(), Error> {
     let tcp_message_buffer_size = 128;
     let can_interface = "can0";
     // TODO - Figure out what these value should be
-    let udp_socket_read_timeout = Duration::from_millis(1); // Amount of time the UDP Socket will wait for a message from the Controller
-    let can_socket_read_timeout = Duration::from_millis(1); // Amount of time the CAN Socket will wait for a message from the rest of the POD
+    let udp_socket_read_timeout = Duration::from_millis(6000); // Amount of time the UDP Socket will wait for a message from the Controller
+    let can_socket_read_timeout = Duration::from_millis(10000); // Amount of time the CAN Socket will wait for a message from the rest of the POD
     let udp_max_number_timeouts = 10;
     // End Configuration Values
 
@@ -314,7 +314,9 @@ pub fn run_threads() -> Result<(), Error> {
         // END Section - Common Functions
 
         'main_loop: loop {
-            let mut socket_buffer = [0u8; 256];
+            let mut socket_buffer = [0u8; 1024];
+            println!("Current State: {:?}", current_pod_state);
+            println!("Current State: {:?}", server_state);
             match server_state {
                 ServerState::Disconnected => {
                     match get_udp_receiver_message_or_panic() {
@@ -337,6 +339,7 @@ pub fn run_threads() -> Result<(), Error> {
                             // for where or not we can transition to a new state etc. The Only Goal For Error State is
                             // to hopefully keep the Rpi connected to the desktop long enough to tell the desktop that
                             // A failure was found and that the pod is working to shut down
+                            println!("{} Bytes Read", bytes_received);
                             if !current_pod_state.is_error_state() {
                                 if let Ok(desktop_state_message) = DesktopStateMessage::from_json_bytes(&socket_buffer) {
                                     if desktop_state_message.requested_state == current_pod_state {
@@ -411,7 +414,13 @@ pub fn run_threads() -> Result<(), Error> {
                     };
                     udp_socket.send_pod_state_message(&pod_state_message);
                 },
-                ServerState::Recovery => {},
+                ServerState::Recovery => {
+                    match current_pod_state {
+                        _ => {
+                            server_state = ServerState::Connected
+                        }
+                    }
+                },
                 ServerState::Startup => {
                     match get_udp_receiver_message_or_panic() {
                         UDPMessage::StartupComplete => {
@@ -589,7 +598,7 @@ fn handle_tcp_socket_event(
                         ServerState::Disconnected => {
                             addr.set_port(8888);
                             udp_sender.send(UDPMessage::ConnectToHost(addr)).expect("Should be able to send Message to UDP Socket from TCP Socket");
-                            stream.write_message(b"OK 8888")?; // Tell the Handshake requester what udp port to listen on
+                            stream.write_message(b"8888")?; // Tell the Handshake requester what udp port to listen on
                             new_state = ServerState::Connected;
                         },
                         ServerState::Connected => {
