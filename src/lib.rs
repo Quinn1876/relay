@@ -5,11 +5,10 @@
  * support for unix primitives which are not available on windows and so the code needs to be compiled on the raspberry pi itself for full testing.
  */
 
-#[cfg(feature = "socketcan")]
 pub mod tcp_server;
-#[cfg(feature = "socketcan")]
+#[cfg(unix)]
 pub mod roboteq;
-#[cfg(feature = "socketcan")]
+#[cfg(unix)]
 pub mod can;
 
 pub mod stream_utils;

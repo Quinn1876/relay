@@ -25,13 +25,16 @@ use json::{
 };
 use chrono::{ NaiveDateTime, Utc };
 use polling::{ Event, Poller };
+#[cfg(unix)]
 use socketcan::{ CANSocket, ShouldRetry, CANFrame };
 
-
+#[cfg(unix)]
 use crate::roboteq::Roboteq;
 use crate::requests;
 use crate::stream_utils;
+#[cfg(unix)]
 use crate::can;
+#[cfg(unix)]
 use crate::can::{CanCommand, FrameHandler};
 use crate::udp_messages::{ DesktopStateMessage, Errno, CustomUDPSocket };
 use crate::udp_messages;
@@ -83,10 +86,12 @@ mod test {
 pub struct Config<A: std::net::ToSocketAddrs> {
     address: A,
     buffer_size: usize,
+    #[cfg(unix)]
     can_config: can::Config
 }
 
 impl<A: std::net::ToSocketAddrs> Config<A> {
+    #[cfg(unix)]
     pub fn new(address: A, buffer_size: usize, can_config: can::Config) -> Config<A> {
         Config {
             address,
@@ -94,14 +99,29 @@ impl<A: std::net::ToSocketAddrs> Config<A> {
             can_config
         }
     }
+    #[cfg(windows)]
+    pub fn new(address: A, buffer_size: usize) -> Config<A> {
+        Config {
+            address,
+            buffer_size,
+        }
+    }
 }
 
 impl Config<SocketAddr> {
+    #[cfg(unix)]
     pub fn default() -> Config<SocketAddr> {
         Config {
             address: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
             buffer_size: 256,
             can_config: can::Config::default()
+        }
+    }
+    #[cfg(windows)]
+    pub fn default() -> Config<SocketAddr> {
+        Config {
+            address: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
+            buffer_size: 256,
         }
     }
 
@@ -170,6 +190,7 @@ pub enum Error {
     InvalidState(&'static str),
     TcpSocketError(std::io::Error),
     UdpSocketError(std::io::Error),
+    #[cfg(unix)]
     CanSocketError(can::Error),
     PollerError(std::io::Error),
     InvalidAddr(std::io::Error),
@@ -186,7 +207,7 @@ enum ServerState {
     Recovery
 }
 
-
+#[cfg(feature = "socketcan")]
 #[derive(Debug)]
 pub enum CanError {
     MessageError(socketcan::ConstructionError),
@@ -194,10 +215,12 @@ pub enum CanError {
 }
 
 // START TODO: Move Section to own file
+#[cfg(unix)]
 trait RelayCan {
     fn send_pod_state(&self, state: &PodStates) -> Result<(), CanError>;
 }
 
+#[cfg(feature = "socketcan")]
 impl RelayCan for CANSocket {
     fn send_pod_state(&self, state: &PodStates) -> Result<(), CanError> {
         self.write_frame_insist(
@@ -221,6 +244,7 @@ enum UDPMessage {
 }
 
 enum WorkerMessage {
+    #[cfg(unix)]
     CanFrameAndTimeStamp(CANFrame, NaiveDateTime)
 }
 
@@ -244,10 +268,12 @@ pub fn run_threads() -> Result<(), Error> {
     let udp_max_number_timeouts = 10;
     // End Configuration Values
 
+    let tcp_handle;
+    let udp_handle;
     // TCP Thread
     {
         let udpSender = udpSender.clone(); // Clone before moving into thread
-        std::thread::spawn(move || {
+        tcp_handle = std::thread::spawn(move || {
             // Open and Bind to port 8080 TODO: Move into config
             let listener = TcpListener::bind("0.0.0.0:8080").expect("Should be able to connect");
             let mut request_parser = requests::RequestParser::new();
@@ -266,7 +292,7 @@ pub fn run_threads() -> Result<(), Error> {
         });
     }
     // UDP Thread
-    std::thread::spawn(move || {
+    udp_handle = std::thread::spawn(move || {
         // Setup
         let udp_socket = UdpSocket::bind("0.0.0.0:8888").expect("Unable to Bind to UDP Socket on port 8888");
         udp_socket.set_read_timeout(Some(udp_socket_read_timeout)).expect("Unable to set Read timeout for UDP Socket");
@@ -449,55 +475,58 @@ pub fn run_threads() -> Result<(), Error> {
      *          <Recovery, *>: Send StateID
      *
      */
+    #[cfg(unix)]
     {
         let udpSender = udpSender.clone();
         std::thread::spawn(move || {
             // Initialization
-            let socket = socketcan::CANSocket::open(can_interface).expect(&format!("Unable to Connect to CAN interface: {}", can_interface));
+            if cfg!(unix) {
+                let socket = socketcan::CANSocket::open(can_interface).expect(&format!("Unable to Connect to CAN interface: {}", can_interface));
 
-            let mut requested_pod_state = PodStates::LowVoltage;
-            let mut bms_state = PodStates::LowVoltage;
-            // TODO: IMPLE mc_state
+                let mut requested_pod_state = PodStates::LowVoltage;
+                let mut bms_state = PodStates::LowVoltage;
+                // TODO: IMPLE mc_state
 
-            socket.set_read_timeout(can_socket_read_timeout).expect("Unable to Set Timeout on CAN Socket");
-            loop {
-                // poll read
-                let response = socket.read_frame(); // with timeout
-                if response.should_retry() {
-                    // Timeout with no message
-                    println!("CAN SOCKET: Read timeout no message Received");
-                } else if let Ok(frame) = response {
-                    // Frame Received
-                    // Check for state messages before passing the frame on to the worker
-                    if let CanCommand::BmsStateChange(newState) = frame.get_command() {
-                        bms_state = newState;
-                        udpSender.send(UDPMessage::PodStateChanged(newState)).expect("To Be able to send message to udp from can");
+                socket.set_read_timeout(can_socket_read_timeout).expect("Unable to Set Timeout on CAN Socket");
+                loop {
+                    // poll read
+                    let response = socket.read_frame(); // with timeout
+                    if response.should_retry() {
+                        // Timeout with no message
+                        println!("CAN SOCKET: Read timeout no message Received");
+                    } else if let Ok(frame) = response {
+                        // Frame Received
+                        // Check for state messages before passing the frame on to the worker
+                        if let CanCommand::BmsStateChange(newState) = frame.get_command() {
+                            bms_state = newState;
+                            udpSender.send(UDPMessage::PodStateChanged(newState)).expect("To Be able to send message to udp from can");
+                        }
+                        workerSender.send(WorkerMessage::CanFrameAndTimeStamp(frame, Utc::now().naive_local())).expect("Unable to send message from CAN Thread on Worker Channel");
+                    } else {
+                        // ERROR Reading from Can socket
                     }
-                    workerSender.send(WorkerMessage::CanFrameAndTimeStamp(frame, Utc::now().naive_local())).expect("Unable to send message from CAN Thread on Worker Channel");
-                } else {
-                    // ERROR Reading from Can socket
-                }
 
-                // check for state message from udp
-                if let Ok(message) = canReceiver.try_recv() {
-                    match message {
-                        CANMessage::ChangeState(new_state) => {
-                            requested_pod_state = new_state;
+                    // check for state message from udp
+                    if let Ok(message) = canReceiver.try_recv() {
+                        match message {
+                            CANMessage::ChangeState(new_state) => {
+                                requested_pod_state = new_state;
+                            }
                         }
                     }
-                }
 
-                let message_result;
-                if requested_pod_state == bms_state && requested_pod_state == PodStates::AutoPilot {
-                    message_result = socket.set_motor_throttle(1, 1, 100); // TODO move this into config
-                } else {
-                    message_result = socket.send_pod_state(&requested_pod_state);
-                }
+                    let message_result;
+                    if requested_pod_state == bms_state && requested_pod_state == PodStates::AutoPilot {
+                        message_result = socket.set_motor_throttle(1, 1, 100); // TODO move this into config
+                    } else {
+                        message_result = socket.send_pod_state(&requested_pod_state);
+                    }
 
-                match message_result {
-                    Ok(()) => {},
-                    Err(err) => {
-                        println!("Error Sending Message on CAN bus: {:?}",  err);
+                    match message_result {
+                        Ok(()) => {},
+                        Err(err) => {
+                            println!("Error Sending Message on CAN bus: {:?}",  err);
+                        }
                     }
                 }
             }
@@ -507,6 +536,7 @@ pub fn run_threads() -> Result<(), Error> {
     // Worker Thread
     // Initialization
     let mut pod_data = PodData::new();
+    #[cfg(unix)]
     loop {
         match workerReceiver.recv() {
             Ok(message) => {
@@ -538,6 +568,11 @@ pub fn run_threads() -> Result<(), Error> {
             }
         }
     }
+
+    udp_handle.join();
+    tcp_handle.join();
+
+    Ok(())
 }
 
 fn initialize_request_parser(request_parser: &mut requests::RequestParser<RequestTypes>) {
