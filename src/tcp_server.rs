@@ -17,14 +17,7 @@ use std::sync::{
         Sender
     }
 };
-use std::time::SystemTime;
-
-use json::{
-    object,
-    number::Number
-};
 use chrono::{ NaiveDateTime, Utc };
-use polling::{ Event, Poller };
 #[cfg(unix)]
 use socketcan::{ CANSocket, ShouldRetry, CANFrame };
 
@@ -239,40 +232,60 @@ enum CANMessage {
 enum UDPMessage {
     ConnectToHost(SocketAddr),
     StartupComplete,
+    #[allow(dead_code)] // Not Dead, only constructed when running in unix, but the udp socket needs to be able to check it in all cases
     PodStateChanged(PodStates),
+    #[allow(dead_code)]
     TelemetryDataAvailable(PodData, NaiveDateTime)
 }
 
+#[cfg(unix)]
 enum WorkerMessage {
-    #[cfg(unix)]
     CanFrameAndTimeStamp(CANFrame, NaiveDateTime)
 }
 
 enum TcpMessage {
     EnteringRecovery,
+    #[allow(dead_code)] // Not Dead, but it's only constructed when running in unix
     RecoveryComplete,
 }
 
 pub fn run_threads() -> Result<(), Error> {
-    let (udpSender, udpReceiver): (Sender<UDPMessage>, Receiver<UDPMessage>) = channel();
-    let (canSender, canReceiver): (Sender<CANMessage>, Receiver<CANMessage>) = channel();
-    let (workerSender, workerReceiver): (Sender<WorkerMessage>, Receiver<WorkerMessage>) = channel();
-    let (tcpSender, tcpReceiver): (Sender<TcpMessage>, Receiver<TcpMessage>) = channel();
+    let (udp_message_sender, udp_message_receiver): (Sender<UDPMessage>, Receiver<UDPMessage>) = channel();
+    #[allow(unused_variables)] // can_message_receiver is only used in unix, but needs to exist so that other parts of the code can send messages without crashing
+    let (can_message_sender, can_message_receiver): (Sender<CANMessage>, Receiver<CANMessage>) = channel();
+    #[cfg(unix)] // Worker does not need to be created if running outside of unix
+    let (worker_message_sender, worker_message_receiver): (Sender<WorkerMessage>, Receiver<WorkerMessage>) = channel();
+    let (tcp_sender, tcp_receiver): (Sender<TcpMessage>, Receiver<TcpMessage>) = channel();
 
     // Configuration Values
     let tcp_message_buffer_size = 128;
-    let can_interface = "can0";
     // TODO - Figure out what these value should be
     let udp_socket_read_timeout = Duration::from_millis(6000); // Amount of time the UDP Socket will wait for a message from the Controller
-    let can_socket_read_timeout = Duration::from_millis(10000); // Amount of time the CAN Socket will wait for a message from the rest of the POD
     let udp_max_number_timeouts = 10;
     // End Configuration Values
 
+    // CAN Configuration
+    #[cfg(unix)]
+    let can_interface = "can0";
+    #[cfg(unix)]
+    let can_socket_read_timeout = Duration::from_millis(10000); // Amount of time the CAN Socket will wait for a message from the rest of the POD
+    // End CAN Configuration
+
+    // Thread Handles
     let tcp_handle;
     let udp_handle;
+    // End Thread Handles
+
+
+    /// Start Main threads
+    /// TCP
+    /// UDP
+    /// CAN
+    /// Worker
+
     // TCP Thread
     {
-        let udpSender = udpSender.clone(); // Clone before moving into thread
+        let udp_message_sender = udp_message_sender.clone(); // Clone before moving into thread
         tcp_handle = std::thread::spawn(move || {
             // Open and Bind to port 8080 TODO: Move into config
             let listener = TcpListener::bind("0.0.0.0:8080").expect("Should be able to connect");
@@ -280,12 +293,12 @@ pub fn run_threads() -> Result<(), Error> {
             initialize_request_parser(&mut request_parser);
 
             let mut server_state = ServerState::Disconnected;
-            udpSender.send(UDPMessage::StartupComplete).expect("Unable to send Message to UDP Thread to notify startup complete");
+            udp_message_sender.send(UDPMessage::StartupComplete).expect("Unable to send Message to UDP Thread to notify startup complete");
 
             // accept connections and process them sequentially
             for stream in listener.incoming() {
                 match stream {
-                    Ok(stream) => handle_tcp_socket_event(stream, &request_parser, tcp_message_buffer_size, &udpSender, &mut server_state, &tcpReceiver).unwrap(),
+                    Ok(stream) => handle_tcp_socket_event(stream, &request_parser, tcp_message_buffer_size, &udp_message_sender, &mut server_state, &tcp_receiver).unwrap(),
                     Err(e) => println!("An Error Occurred While Handling a TCP Connection: {:?}", e),
                 }
             }
@@ -310,7 +323,7 @@ pub fn run_threads() -> Result<(), Error> {
 
         // BEGIN Section - Common Functions
         let get_udp_receiver_message_or_panic = || {
-            if let Ok(message) = udpReceiver.recv() {
+            if let Ok(message) = udp_message_receiver.recv() {
                 message
             } else {
                 // This should only happen if the channel closes. Which is a panic situation
@@ -319,7 +332,7 @@ pub fn run_threads() -> Result<(), Error> {
         };
 
         let notify_recovery = || {
-            tcpSender.send(TcpMessage::EnteringRecovery).expect("To be able to notify tcp thread that we are entering recovery mode");
+            tcp_sender.send(TcpMessage::EnteringRecovery).expect("To be able to notify tcp thread that we are entering recovery mode");
         };
 
         let invalid_transition_recognized = |errno: &mut Errno, server_state: &mut ServerState| {
@@ -333,7 +346,7 @@ pub fn run_threads() -> Result<(), Error> {
         };
 
         let trigger_transition_to_new_state = |next_pod_state: &mut PodStates, requested_state: PodStates| {
-            canSender.send(CANMessage::ChangeState(requested_state.clone())).expect("Should be able to Send a message to the Can thread from the UDP thread");
+            can_message_sender.send(CANMessage::ChangeState(requested_state.clone())).expect("Should be able to Send a message to the Can thread from the UDP thread");
             *next_pod_state = requested_state;
         };
 
@@ -415,16 +428,16 @@ pub fn run_threads() -> Result<(), Error> {
                         }
                     }
                     // Check for new Messages from other threads
-                    while let Ok(message) = udpReceiver.try_recv() {
+                    while let Ok(message) = udp_message_receiver.try_recv() {
                         match message {
-                            UDPMessage::PodStateChanged(newState) => {
-                                if newState.is_error_state() {
+                            UDPMessage::PodStateChanged(new_state) => {
+                                if new_state.is_error_state() {
                                     errno = Errno::GeneralPodFailure;
                                 }
-                                current_pod_state = newState;
+                                current_pod_state = new_state;
                             },
-                            UDPMessage::TelemetryDataAvailable(newData, timestamp) => {
-                                current_pod_data = newData;
+                            UDPMessage::TelemetryDataAvailable(new_data, timestamp) => {
+                                current_pod_data = new_data;
                                 current_telemetry_timestamp = timestamp;
                             },
                             unrecognized_message => {
@@ -438,7 +451,14 @@ pub fn run_threads() -> Result<(), Error> {
                     } else {
                         udp_messages::PodStateMessage::new_no_telemetry(current_pod_state, next_pod_state, errno, current_telemetry_timestamp, matches!(server_state, ServerState::Recovery))
                     };
-                    udp_socket.send_pod_state_message(&pod_state_message);
+                    match udp_socket.send_pod_state_message(&pod_state_message) {
+                        Ok(bytes_sent) => {
+                            println!("UDP THREAD: Send {} to Desktop", bytes_sent);
+                        },
+                        Err(error) => {
+                            println!("Error Sending Message on UDP Thread: {:?}", error);
+                        }
+                    }
                 },
                 ServerState::Recovery => {
                     match current_pod_state {
@@ -501,13 +521,13 @@ pub fn run_threads() -> Result<(), Error> {
                             bms_state = newState;
                             udpSender.send(UDPMessage::PodStateChanged(newState)).expect("To Be able to send message to udp from can");
                         }
-                        workerSender.send(WorkerMessage::CanFrameAndTimeStamp(frame, Utc::now().naive_local())).expect("Unable to send message from CAN Thread on Worker Channel");
+                        worker_message_sender.send(WorkerMessage::CanFrameAndTimeStamp(frame, Utc::now().naive_local())).expect("Unable to send message from CAN Thread on Worker Channel");
                     } else {
                         // ERROR Reading from Can socket
                     }
 
                     // check for state message from udp
-                    if let Ok(message) = canReceiver.try_recv() {
+                    if let Ok(message) = can_message_receiver.try_recv() {
                         match message {
                             CANMessage::ChangeState(new_state) => {
                                 requested_pod_state = new_state;
@@ -535,42 +555,44 @@ pub fn run_threads() -> Result<(), Error> {
 
     // Worker Thread
     // Initialization
-    let mut pod_data = PodData::new();
     #[cfg(unix)]
-    loop {
-        match workerReceiver.recv() {
-            Ok(message) => {
-                match message {
-                    WorkerMessage::CanFrameAndTimeStamp(frame, time) => {
-                        // Handle CAN Frame in here
-                        let mut new_data = true;
-                        match frame.get_command() {
-                            CanCommand::BmsHealthCheck{ battery_pack_current, cell_temperature } => {},
-                            CanCommand::PressureHigh(pressure) => pod_data.pressure_high = Some(pressure),
-                            CanCommand::PressureLow1(pressure) => pod_data.pressure_low_1 = Some(pressure),
-                            CanCommand::PressureLow2(pressure) => pod_data.pressure_low_2 = Some(pressure),
-                            CanCommand::Torchic1(data) => pod_data.torchic_1 = data,
-                            CanCommand::Torchic2(data) => pod_data.torchic_2 = data,
-                            _ => {
-                                new_data = false;
+    {
+        let mut pod_data = PodData::new();
+        loop {
+            match worker_message_receiver.recv() {
+                Ok(message) => {
+                    match message {
+                        WorkerMessage::CanFrameAndTimeStamp(frame, time) => {
+                            // Handle CAN Frame in here
+                            let mut new_data = true;
+                            match frame.get_command() {
+                                CanCommand::BmsHealthCheck{ battery_pack_current, cell_temperature } => {},
+                                CanCommand::PressureHigh(pressure) => pod_data.pressure_high = Some(pressure),
+                                CanCommand::PressureLow1(pressure) => pod_data.pressure_low_1 = Some(pressure),
+                                CanCommand::PressureLow2(pressure) => pod_data.pressure_low_2 = Some(pressure),
+                                CanCommand::Torchic1(data) => pod_data.torchic_1 = data,
+                                CanCommand::Torchic2(data) => pod_data.torchic_2 = data,
+                                _ => {
+                                    new_data = false;
+                                }
+                            }
+                            if new_data {
+                                udpSender.send(UDPMessage::TelemetryDataAvailable(pod_data, time)).expect("To be able to send telemetry data to udp from worker");
                             }
                         }
-                        if new_data {
-                            udpSender.send(UDPMessage::TelemetryDataAvailable(pod_data, time)).expect("To be able to send telemetry data to udp from worker");
-                        }
                     }
+                },
+                Err(err) => {
+                    println!("Worker Receiver Error: {:?}", err);
+                    println!("Exiting");
+                    return Ok(());
                 }
-            },
-            Err(err) => {
-                println!("Worker Receiver Error: {:?}", err);
-                println!("Exiting");
-                return Ok(());
             }
         }
     }
 
-    udp_handle.join();
-    tcp_handle.join();
+    udp_handle.join().expect("Should be able to join at the end of the Program");
+    tcp_handle.join().expect("Should be able to join at the end of the Program");
 
     Ok(())
 }
@@ -633,17 +655,17 @@ fn handle_tcp_socket_event(
                         ServerState::Disconnected => {
                             addr.set_port(8888);
                             udp_sender.send(UDPMessage::ConnectToHost(addr)).expect("Should be able to send Message to UDP Socket from TCP Socket");
-                            stream.write_message(b"8888")?; // Tell the Handshake requester what udp port to listen on
+                            stream.write_message(b"OK 8888")?; // Tell the Handshake requester what udp port to listen on
                             new_state = ServerState::Connected;
                         },
                         ServerState::Connected => {
                             stream.write_message(b"ERROR POD Already Connected to Controller")?;
                         },
                         ServerState::Startup => {
-                            panic!("TCP Socket should not be accepting connections in the Startup State")
+                            panic!("TCP Socket should not be accepting connections in the Startup State");
                         },
                         ServerState::Recovery => {
-                            stream.write_message(b"ERROR Unable to Connect to Pod while recovering. Please Wait for recovery to finish");
+                            stream.write_message(b"ERROR Unable to Connect to Pod while recovering. Please Wait for recovery to finish")?;
                         }
                     }
                 },
@@ -662,7 +684,7 @@ fn handle_tcp_socket_event(
         requests::RequestParserResult::InvalidRequest => {
             println!("Invalid Request Received");
         },
-        _ => ()
+        _ => {}
     };
     *server_state = new_state;
     Ok(())
