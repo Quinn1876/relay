@@ -231,6 +231,7 @@ enum CANMessage {
 #[derive(Debug)]
 enum UDPMessage {
     ConnectToHost(SocketAddr),
+    DisconnectFromHost,
     StartupComplete,
     #[allow(dead_code)] // Not Dead, only constructed when running in unix, but the udp socket needs to be able to check it in all cases
     PodStateChanged(PodStates),
@@ -286,7 +287,7 @@ pub fn run_threads() -> Result<(), Error> {
     // TCP Thread
     {
         let udp_message_sender = udp_message_sender.clone(); // Clone before moving into thread
-        tcp_handle = std::thread::spawn(move || {
+        tcp_handle = std::thread::Builder::new().name("TCP Thread".to_string()).spawn(move || {
             // Open and Bind to port 8080 TODO: Move into config
             let listener = TcpListener::bind("0.0.0.0:8080").expect("Should be able to connect");
             let mut request_parser = requests::RequestParser::new();
@@ -302,12 +303,12 @@ pub fn run_threads() -> Result<(), Error> {
                     Err(e) => println!("An Error Occurred While Handling a TCP Connection: {:?}", e),
                 }
             }
-        });
+        }).expect("Should be able to create Thread");
     }
     // UDP Thread
-    udp_handle = std::thread::spawn(move || {
+    udp_handle = std::thread::Builder::new().name("UDP Thread".to_string()).spawn(move || {
         // Setup
-        let udp_socket = UdpSocket::bind("0.0.0.0:8888").expect("Unable to Bind to UDP Socket on port 8888");
+        let udp_socket = UdpSocket::bind("0.0.0.0:8080").expect("Unable to Bind to UDP Socket on port 8080");
         udp_socket.set_read_timeout(Some(udp_socket_read_timeout)).expect("Unable to set Read timeout for UDP Socket");
 
         let mut server_state = ServerState::Startup;
@@ -352,22 +353,24 @@ pub fn run_threads() -> Result<(), Error> {
 
         // END Section - Common Functions
 
-        'main_loop: loop {
+        'udp_main_loop: loop {
             let mut socket_buffer = [0u8; 1024];
-            println!("Current State: {:?}", current_pod_state);
-            println!("Current State: {:?}", server_state);
+            println!("UDP THREAD: Current POD    State: {:?}", current_pod_state);
+            println!("UDP THREAD: NEXT    POD    State: {:?}", next_pod_state);
+            println!("UDP THREAD: Current SERVER State: {:?}", server_state);
             match server_state {
                 ServerState::Disconnected => {
                     match get_udp_receiver_message_or_panic() {
                         UDPMessage::ConnectToHost(addr) => {
                             if let Ok(_) = udp_socket.connect(addr) {
                                 server_state = ServerState::Connected;
+                                println!("UDP THREAD: Connected to addr: {:?}", addr);
                             } else {
-                                println!("Unable to connect to {:?}", addr);
+                                println!("UDP THREAD: Unable to connect to {:?}", addr);
                             }
                         },
                         message => {
-                            println!("Received Message on UDP mpsc channel while Disconnected: {:?}", message);
+                            println!("UDP THREAD: Received Message on UDP mpsc channel while Disconnected: {:?}", message);
                         }
                     }
                 },
@@ -378,7 +381,7 @@ pub fn run_threads() -> Result<(), Error> {
                             // for where or not we can transition to a new state etc. The Only Goal For Error State is
                             // to hopefully keep the Rpi connected to the desktop long enough to tell the desktop that
                             // A failure was found and that the pod is working to shut down
-                            println!("{} Bytes Read", bytes_received);
+                            // println!("UDP THREAD: {} Bytes Read", bytes_received);
                             if !current_pod_state.is_error_state() {
                                 if let Ok(desktop_state_message) = DesktopStateMessage::from_json_bytes(&socket_buffer) {
                                     if desktop_state_message.requested_state == current_pod_state {
@@ -386,7 +389,7 @@ pub fn run_threads() -> Result<(), Error> {
                                             handle_telemetry_timestamp(&mut last_received_telemetry_timestamp, desktop_state_message.most_recent_timestamp);
                                         } else {
                                             invalid_transition_recognized(&mut errno, &mut server_state);
-                                            continue 'main_loop;
+                                            continue 'udp_main_loop;
                                         }
                                     } else {
                                         if current_pod_state.can_transition_to(&desktop_state_message.requested_state) {
@@ -398,33 +401,40 @@ pub fn run_threads() -> Result<(), Error> {
                                                     handle_telemetry_timestamp(&mut last_received_telemetry_timestamp, desktop_state_message.most_recent_timestamp);
                                                 } else {
                                                     invalid_transition_recognized(&mut errno, &mut server_state);
-                                                    continue 'main_loop;
+                                                    continue 'udp_main_loop;
                                                 }
                                             }
                                         } else {
                                             invalid_transition_recognized(&mut errno, &mut server_state);
-                                            continue 'main_loop;
+                                            continue 'udp_main_loop;
                                         }
                                     }
                                 } else {
                                     // TODO: This needs to change once we've figured out how we want to handle an error
-                                    panic!("Failed to Read DesktopStateMessage in UDP Handler while in Connected State");
+                                    println!("UDP THREAD: Unable to read: {:?}", std::str::from_utf8(&socket_buffer).expect("To be able to convert to utf"));
+                                    panic!("UDP THREAD: Failed to Read DesktopStateMessage in UDP Handler while in Connected State");
                                 }
                                 timeout_counter = 0;
                             }
                         },
                         Err(error) => {
                             println!("Error: {:?}", error); // TODO: Figure out what error is returned for a timeout so that case can be handled separately
+                            match error.kind() {
+                                std::io::ErrorKind::TimedOut => {
+                                    timeout_counter += 1; // Move this to the timeout  portion of the error handler
+                                    if timeout_counter >= udp_max_number_timeouts {
+                                        // TODO Enter into Recovery. Assume Desktop Disconnected
+                                        notify_recovery();
+                                        errno = Errno::ControllerTimeout;
+                                        server_state = ServerState::Recovery;
+                                        continue 'udp_main_loop;
+                                    }
+                                },
+                                _ => {
 
-                            timeout_counter += 1; // Move this to the timeout  portion of the error handler
-                            if timeout_counter >= udp_max_number_timeouts
-                            {
-                                // TODO Enter into Recovery. Assume Desktop Disconnected
-                                notify_recovery();
-                                errno = Errno::ControllerTimeout;
-                                server_state = ServerState::Recovery;
-                                continue 'main_loop;
+                                }
                             }
+
                         }
                     }
                     // Check for new Messages from other threads
@@ -440,6 +450,9 @@ pub fn run_threads() -> Result<(), Error> {
                                 current_pod_data = new_data;
                                 current_telemetry_timestamp = timestamp;
                             },
+                            UDPMessage::DisconnectFromHost => {
+                                server_state = ServerState::Recovery;
+                            }
                             unrecognized_message => {
                                 panic!("UnExpected Message Received on UDP mpsc channel while in Connected State: {:?}", unrecognized_message);
                             }
@@ -453,7 +466,7 @@ pub fn run_threads() -> Result<(), Error> {
                     };
                     match udp_socket.send_pod_state_message(&pod_state_message) {
                         Ok(bytes_sent) => {
-                            println!("UDP THREAD: Send {} to Desktop", bytes_sent);
+                            // println!("UDP THREAD: Send {} to Desktop", bytes_sent);
                         },
                         Err(error) => {
                             println!("Error Sending Message on UDP Thread: {:?}", error);
@@ -461,9 +474,53 @@ pub fn run_threads() -> Result<(), Error> {
                     }
                 },
                 ServerState::Recovery => {
+                    let message = udp_messages::PodStateMessage::new_no_telemetry(current_pod_state, next_pod_state, errno, current_telemetry_timestamp, matches!(server_state, ServerState::Recovery));
+                    udp_socket.send_pod_state_message(&message).expect("To be able to send message");
+                    while let Ok(message) = udp_message_receiver.try_recv() {
+                        match message {
+                            UDPMessage::PodStateChanged(new_state) => {
+                                if new_state.is_error_state() {
+                                    errno = Errno::GeneralPodFailure;
+                                }
+                                current_pod_state = new_state;
+                            },
+                            UDPMessage::TelemetryDataAvailable(new_data, timestamp) => {
+                                current_pod_data = new_data;
+                                current_telemetry_timestamp = timestamp;
+                            },
+                            UDPMessage::DisconnectFromHost => {
+                                server_state = ServerState::Recovery;
+                            }
+                            unrecognized_message => {
+                                panic!("UnExpected Message Received on UDP mpsc channel while in Connected State: {:?}", unrecognized_message);
+                            }
+                        }
+                    }
                     match current_pod_state {
-                        _ => {
-                            server_state = ServerState::Connected
+                        PodStates::LowVoltage => {
+                            server_state = ServerState::Disconnected;
+                            tcp_sender.send(TcpMessage::RecoveryComplete).expect("To be able to send message");
+                        },
+                        PodStates::Armed => {
+                            // transision to lowVoltage
+                            if next_pod_state != PodStates::LowVoltage {
+                                trigger_transition_to_new_state(&mut next_pod_state, PodStates::LowVoltage);
+                            }
+                        },
+                        PodStates::AutoPilot => {
+                            //transition to braking
+                            if next_pod_state != PodStates::Braking {
+                                trigger_transition_to_new_state(&mut next_pod_state, PodStates::Braking);
+                            }
+                        },
+                        PodStates::Braking => {
+                            // wait till regression to lv
+                            if next_pod_state != PodStates::LowVoltage {
+                                trigger_transition_to_new_state(&mut next_pod_state, PodStates::LowVoltage)
+                            }
+                        },
+                        state => {
+                            println!("Pod state mising in recovery procedure: {:?}", state);
                         }
                     }
                 },
@@ -479,7 +536,7 @@ pub fn run_threads() -> Result<(), Error> {
                 },
             }
         }
-    });
+    }).expect("Should be able to create Thread");
 
     #[allow(unused_doc_comments)]
     /**
@@ -498,7 +555,7 @@ pub fn run_threads() -> Result<(), Error> {
     #[cfg(unix)]
     {
         let udpSender = udpSender.clone();
-        std::thread::spawn(move || {
+        std::thread::Builder::new().name("CAN Thread".to_string()).spawn(move || {
             // Initialization
             if cfg!(unix) {
                 let socket = socketcan::CANSocket::open(can_interface).expect(&format!("Unable to Connect to CAN interface: {}", can_interface));
@@ -550,7 +607,7 @@ pub fn run_threads() -> Result<(), Error> {
                     }
                 }
             }
-        });
+        }).expect("Should be able to create Thread");
     }
 
     // Worker Thread
@@ -670,8 +727,18 @@ fn handle_tcp_socket_event(
                     }
                 },
                 RequestTypes::Disconnect => {
-                    println!("Disconnect Received");
-                    todo!()
+                    match server_state {
+                        ServerState::Connected => {
+                            println!("TCP THREAD: Disconnect Received");
+                            udp_sender.send(UDPMessage::DisconnectFromHost).expect("Should be able to send message to UDP socket");
+                            stream.write_message(b"DISCONNECTED")?;
+                            new_state = ServerState::Recovery;
+                        },
+                        _ => {
+                            println!("TCP HANDLER: Received a disconnect request while not connected");
+                            stream.write_message(b"DISCONNECTED")?;
+                        }
+                    }
                 },
                 RequestTypes::Unknown => {
                     println!("Received a Malformed Input");

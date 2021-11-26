@@ -23,9 +23,17 @@ mod test {
     use super::DesktopStateMessage;
     #[test]
     fn test_json_bytes() {
-        let message = b"{\"requested_state\":1,\"most_recent_timestamp\":1636842789806}";
-        assert_eq!(DesktopStateMessage::from_json_bytes(message).expect("Unable to Convert message").to_json_bytes(), message);
-    }
+        let messages: Vec<&[u8]> = vec![
+            b"{\"requested_state\":1,\"most_recent_timestamp\":1636842789806}",
+            // b"{\"requested_state\":1, \"most_recent_timestamp\":0}", // Will Fail
+            b"{\"requested_state\":1,\"most_recent_timestamp\":1}",
+            ];
+            for message in messages {
+                println!("Message: {}", std::str::from_utf8(message).expect("to be able to convert"));
+            }
+            let message = b"{\"requested_state\":1,\"most_recent_timestamp\":1}\0\0";
+            assert_eq!(DesktopStateMessage::from_json_bytes(message).expect("Unable to Convert message").to_json_bytes(), b"{\"requested_state\":1,\"most_recent_timestamp\":1}");
+        }
 }
 
 const REQUESTED_STATE: &'static str = "requested_state";
@@ -33,7 +41,9 @@ const MOST_RECENT_TIMESTAMP: &'static str = "most_recent_timestamp";
 
 impl DesktopStateMessage {
     pub fn from_json_bytes(json_bytes: &[u8]) -> Result<DesktopStateMessage, DesktopStateMessageError> {
-        let parsed = json::parse(&String::from_utf8_lossy(json_bytes)).map_err(|e| DesktopStateMessageError::JsonParseError(e))?;
+        let string = &String::from_utf8_lossy(json_bytes);
+        let trimmed = string.trim_matches(char::from(0)); // Remove NULL Terminators if there are any from the buffer
+        let parsed = json::parse(trimmed).map_err(|e| DesktopStateMessageError::JsonParseError(e))?;
         if parsed[REQUESTED_STATE].is_null() || parsed[MOST_RECENT_TIMESTAMP].is_null() {
             return Err(DesktopStateMessageError::InvalidMessage(format!("An expected field was null in message: {:?}", parsed.dump())));
         }
