@@ -1,0 +1,3 @@
+[submodule "canbus-canota"]
+	path = canbus-canota
+	url = https://github.com/waterloop/canbus-canota.git
