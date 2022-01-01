@@ -2,6 +2,10 @@
 The relay service is designed to run on a raspberry pi in a Waterloop Hyperloop Pod. It's goal is to enable remote communication between the desktop controller and the Pod's subsystems.
 The relay service also enables remote flashing supported embedded devices.
 
+## Testing on Windows
+Portions of the relay service rely on having access to the `socketcan` crate which is only for linux. These portions of the code are only important for connecting to the canbus.
+For the purposes of testing the connection with the desktop, you can run the relay crate on windows with `cargo run` but it will not have any CAN functionality.
+
 # CRATE: canota-sys
 THe canota-sys crate provides bindings to a C library which is used for ota flashing through the CAN bus.
 The bindings are generated and stored in the repository. After they are generated, some manual work is needed
@@ -17,3 +21,15 @@ You may be prompted to install other packages which bindgen relies on if they ar
 Once bindgen is installed, run `make generate-bindings-canota` to generate the bindings file.
 
 
+# Useful Cargo Commands
+-   cargo run  : Runs a binary crate. For the purpose of this repo, run this command from the root to run the relay service
+- `cargo build` : Builds a binary or library crate without running it if it is a binary crate. Useful for checking if code will compile
+- `cargo test` : Builds and runs the tests for a crate
+- `cargo doc --open` : Generates docs for the crate that this is called in.
+
+### References that were helpful building this repository
+[Using C Libraries in Rust](https://medium.com/dwelo-r-d/using-c-libraries-in-rust-13961948c72a)
+
+Rust for Rustaceans by Jon GJENGSET
+
+The Rust Book
