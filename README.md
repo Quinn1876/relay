@@ -6,10 +6,15 @@ The relay service also enables remote flashing supported embedded devices.
 Portions of the relay service rely on having access to the `socketcan` crate which is only for linux. These portions of the code are only important for connecting to the canbus.
 For the purposes of testing the connection with the desktop, you can run the relay crate on windows with `cargo run` but it will not have any CAN functionality.
 
-# CRATE: canota-sys
-THe canota-sys crate provides bindings to a C library which is used for ota flashing through the CAN bus.
+# Crate: canota-sys
+The canota-sys crate provides bindings to a C library which is used for ota flashing through the CAN bus.
 The bindings are generated and stored in the repository. After they are generated, some manual work is needed
-to clean up the generated bindings. This includes adding some markers for functions which indicate errors in the form of boolean values.
+to clean up the generated bindings. This includes adding some markers for functions which indicate errors in the form of boolean values. Outside of the markers, the C library is provided as is with unsafe functions. For a safe wrapper api, see the `canota` crate.s
+
+# Crate: canota
+The goal of the canota crate is to provide a safe, application ready implementation of the canota-sys library.
+
+
 
 ## Generating the bindings
 Creating the bindings should be done on a linux device or through WSL2.
@@ -27,8 +32,12 @@ Once bindgen is installed, run `make generate-bindings-canota` to generate the b
 - `cargo test` : Builds and runs the tests for a crate
 - `cargo doc --open` : Generates docs for the crate that this is called in.
 
-### References that were helpful building this repository
+
+# References that were helpful building this repository
+
 [Using C Libraries in Rust](https://medium.com/dwelo-r-d/using-c-libraries-in-rust-13961948c72a)
+
+[Wrapping Unsafe C Libraries in Rust](https://medium.com/dwelo-r-d/wrapping-unsafe-c-libraries-in-rust-d75aeb283c65)
 
 Rust for Rustaceans by Jon GJENGSET
 
