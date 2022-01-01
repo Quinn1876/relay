@@ -3,3 +3,6 @@ raspberry-local:
 
 on-pi:
 	cargo build --features "socketcan"
+
+generate-bindings-canota:
+	bindgen ./canbus-canota/canota.h -o canota-sys/src/bindings.rs --whitelist-function '^canota_.*'
