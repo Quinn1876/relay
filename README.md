@@ -42,3 +42,5 @@ Once bindgen is installed, run `make generate-bindings-canota` to generate the b
 Rust for Rustaceans by Jon GJENGSET
 
 The Rust Book
+
+[Socket Can Documentation](https://www.kernel.org/doc/html/latest/networking/can.html)
