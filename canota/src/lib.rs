@@ -20,8 +20,8 @@ mod tests {
 #[derive(Debug)]
 pub enum Error {
     InitializationError(Errno),
-    InvalidStringError(std::ffi::FromVecWithNulError),
-    DeviceUnavailable(u8), // TODO: Make this a named field
+    InvalidStringError(std::ffi::NulError),
+    DeviceUnavailable { short_device_id: u8 },
     RawCommandWriteError,
     RawCommandReadError,
 }
@@ -31,7 +31,7 @@ pub struct Canota {
     ctx: *mut canota_sys::canota_ctx,
 }
 
-#[derive(Clone, Debug, ParEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum DeviceMode {
     Application,
     Bootloader,
@@ -39,7 +39,7 @@ pub enum DeviceMode {
 }
 
 // TODO Maybe represent this as a state type instead?
-#[derive(Debug, ParEq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum DeviceType {
     STM32L432KC,
     Unknown
@@ -61,8 +61,8 @@ pub struct DeviceVersion {
     minor: u8
 }
 
-impl From<u8> for DeviceMode {
-    fn from(mode: u8) -> DeviceMode {
+impl From<u32> for DeviceMode {
+    fn from(mode: u32) -> DeviceMode {
         match mode {
             0 => DeviceMode::Application,
             1 => DeviceMode::Bootloader,
@@ -77,7 +77,7 @@ pub struct CanotaDeviceInfo {
     device_id: u32,
     mode: DeviceMode,
     device_type: DeviceType,
-    version: DeviceVersion
+    device_version: DeviceVersion
 }
 
 impl From<&canota_sys::canota_device_ctx> for CanotaDeviceInfo {
@@ -95,19 +95,33 @@ impl From<&canota_sys::canota_device_ctx> for CanotaDeviceInfo {
     }
 }
 
-impl From<std::ffi::FromVecWithNulError> for Error {
-    fn from(error: std::ffi::FromVecWithNulError) -> Self {
-        Error::InvalidStringError(error)
+/** Valid for Device Identification Responses.
+ *  Need to verify for others.
+ * May need to change this to be dynamic based on what "type" of can_frame is returned
+ */
+use byteorder::{ LittleEndian, ByteOrder };
+impl From<&canota_sys::can_frame> for CanotaDeviceInfo {
+    fn from(frame: &canota_sys::can_frame) -> CanotaDeviceInfo {
+        let info = canota_sys::canota_device_ctx__bindgen_ty_1::from(&frame.data[0..3]);
+        let device_id = LittleEndian::read_u32(&frame.data[4..7]); // TODO Test this
+        CanotaDeviceInfo {
+            short_device_id: (frame.can_id & 0xFF) as u8,
+            device_id,
+            mode: DeviceMode::from(((frame.can_id >> 8) & 0xFF) as u32),
+            device_type: DeviceType::from(info.device_type),
+            device_version: DeviceVersion {
+                major: info.version_major,
+                minor: info.version_minor
+            }
+        }
     }
 }
 
-
-struct DeviceIdValid {}
-struct DeviceIdInvalid {}
-
-trait DeviceIdStatus;
-impl DeviceIdStatus for DeviceIdValid;
-impl DeviceIdStatus for DeviceIdInvalid;
+impl From<std::ffi::NulError> for Error {
+    fn from(error: std::ffi::NulError) -> Self {
+        Error::InvalidStringError(error)
+    }
+}
 
 /**
  * Wraps a canota_device_ctx which only has values that are required for
@@ -125,12 +139,15 @@ impl DeviceIdStatus for DeviceIdInvalid;
  *
  * !INTERNAL: This Should Not be exposed to the end user
  */
-struct CanotaDeviceCtxRawCmdCompatible<T: impl DeviceIdStatus> {
-    device_ctx: canota_sys::canota_device_ctx
-    device_id_status: std::marker::PhantomData<T>
+struct DeviceIdValid;
+struct DeviceIdInvalid;
+struct CanotaDeviceCtxRawCmdCompatible<DeviceIdStatus = DeviceIdInvalid> {
+    device_ctx: canota_sys::canota_device_ctx,
+    device_id_status: std::marker::PhantomData<DeviceIdStatus>
 }
 
-impl<T> CanotaDeviceCtxRawCmdCompatible<T> {
+
+impl CanotaDeviceCtxRawCmdCompatible<DeviceIdInvalid>{
     fn new(ctx: *mut canota_sys::canota_ctx) -> CanotaDeviceCtxRawCmdCompatible<DeviceIdInvalid> {
         CanotaDeviceCtxRawCmdCompatible {
             device_ctx: canota_sys::canota_device_ctx {
@@ -145,15 +162,14 @@ impl<T> CanotaDeviceCtxRawCmdCompatible<T> {
                     reserved0: 0
                 }
             },
-            device_id_status: std::marker::PhantomData<DeviceIdInvalid>
+            device_id_status: std::marker::PhantomData
         }
-    },
-}
-impl CanotaDeviceCtxRawCmdCompatible<DeviceIdInvalid>{
+    }
+
     fn set_short_device_id(self, short_device_id: u8) -> CanotaDeviceCtxRawCmdCompatible<DeviceIdValid> {
         CanotaDeviceCtxRawCmdCompatible {
             device_ctx: canota_sys::canota_device_ctx {
-                ctx: self.ctx,
+                ctx: self.device_ctx.ctx,
                 device_id: 0,
                 short_device_id,
                 mode: canota_sys::canota_mode_CANOTA_MODE_APPLICATION,
@@ -164,7 +180,7 @@ impl CanotaDeviceCtxRawCmdCompatible<DeviceIdInvalid>{
                     reserved0: 0
                 }
             },
-            device_id_status: std::marker::PhantomData<DeviceIdValid>
+            device_id_status: std::marker::PhantomData
         }
     }
 }
@@ -176,12 +192,12 @@ impl CanotaDeviceCtxRawCmdCompatible<DeviceIdValid> {
 }
 
 trait CanotaDeviceIdentificationRequest {
-    fn device_identification_request(&self) -> Result<(), Error>;
+    fn device_identification_request(&mut self) -> Result<(), Error>;
 }
 
 impl CanotaDeviceIdentificationRequest for CanotaDeviceCtxRawCmdCompatible<DeviceIdValid> {
-    fn device_identification_request(&self) -> Result<(), Error> {
-        if unsafe { canota_sys::canota_cmd_device_ident_req(self.device.as_ptr())} {
+    fn device_identification_request(&mut self) -> Result<(), Error> {
+        if unsafe { canota_sys::canota_cmd_device_ident_req(&mut self.device_ctx)} {
             Ok(())
         } else {
             Err(Error::RawCommandWriteError)
@@ -192,8 +208,8 @@ impl CanotaDeviceIdentificationRequest for CanotaDeviceCtxRawCmdCompatible<Devic
 
 impl Canota {
     pub fn new(can_interface: impl Into<Vec<u8>>) -> Result<Canota, Error> {
-        let can_interface = std::ffi::CString::from_vec_with_nul(can_interface.into())?;
-        let ctx = unsafe { canota_sys::canota_init(can_interface.as_ptr()) };
+        let can_interface = std::ffi::CString::new(can_interface)?;
+        let ctx = unsafe { canota_sys::canota_init(can_interface.as_ptr()) }; // AHHHHHH LEAKS memory
         if ctx.is_null() {
             return Err(Error::InitializationError(errno()));
         }
@@ -208,22 +224,23 @@ impl Canota {
         Ok(CanotaDeviceInfo::from(device))
     }
 
-    fn get_device_ref<'a>(&mut 'a self, short_device_id: u8) -> Result<&'a canota_sys::canota_device_ctx, Error> {
+    fn get_device_ref<'a>(&'a mut self, short_device_id: u8) -> Result<&'a canota_sys::canota_device_ctx, Error> {
         // get a device with self and short_device_id
-        let device = unsafe { canota_sys::canota_device_from_short_id(self.ctx, short_device_id) };
+        let device = unsafe { canota_sys::canota_device_from_short_id(self.ctx, short_device_id) }; // AHHHHH Leaks memory
         if device.is_null() {
-            Err(Error::DeviceUnavailable(short_device_id))
+            Err(Error::DeviceUnavailable { short_device_id })
+        } else {
+            Ok(unsafe { device.as_ref().unwrap() }) // Check this syntax
         }
-        Ok(device.as_ref()) // Check this syntax
 
     }
 
     /**
      * Library Uses Poll to read with timeout Internally
      */
-    fn raw_receive_frame(&mut self, mask: &canota_sys::mask_match, num_matches: usize) -> Result<canota_sys::can_frame, Error> {
-        let frame = canota_sys::can_frame;
-        let result = unsafe { canota_sys::canota_raw_recv_frame(self.ctx, frame.as_ptr_mut(), mask.as_ptr(), num_matches) };
+    fn raw_receive_frame(&mut self, mask: &mut canota_sys::mask_match, num_matches: u64) -> Result<canota_sys::can_frame, Error> {
+        let mut frame = canota_sys::can_frame::new();
+        let result = unsafe { canota_sys::canota_raw_recv_frame(self.ctx, &mut frame, mask, num_matches) };
         if result {
            Ok(frame)
         } else {
@@ -231,16 +248,20 @@ impl Canota {
         }
     }
 
-    pub fn scan(&mut self) -> Result<(), Error> {
-        let device = CanotaDeviceCtxRawCmdCompatible::new(self.ctx).set_short_device_id(0);
+    pub fn scan(&mut self) -> Result<Vec<CanotaDeviceInfo>, Error> {
+        let mut device = CanotaDeviceCtxRawCmdCompatible::new(self.ctx).set_short_device_id(0);
         for i in 0..=255 {
-            device.set_short_device_id(i);
+            device.update_short_device_id(i);
             device.device_identification_request()?;
         }
-        let mask_match = canota_sys::mask_match {
+        let mut mask_match = canota_sys::mask_match {
             mask:   0x1FFF0000,
             match_: 0x1F010000
         };
-        while Ok(())
+        let mut devices = Vec::with_capacity(255); // Most Number of devices that we can have
+        while let Ok(frame) = self.raw_receive_frame(&mut mask_match, 1) {
+            devices.push(CanotaDeviceInfo::from(&frame))
+        }
+        Ok(devices)
     }
 }

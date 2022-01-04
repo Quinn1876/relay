@@ -8,3 +8,4 @@ edition = "2018"
 [dependencies]
 canota-sys = { path = "../canota-sys" }
 errno = "0.2.8"
+byteorder = "1.4.3"

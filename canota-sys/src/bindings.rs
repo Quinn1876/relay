@@ -14,6 +14,20 @@ pub struct can_frame {
     pub __res1: __u8,
     pub data: [__u8; 8usize],
 }
+
+impl can_frame {
+    pub fn new() -> can_frame {
+        can_frame {
+            can_id: 0,
+            can_dlc: 0,
+            __pad: 0,
+            __res0: 0,
+            __res1: 0,
+            data: [0,0,0,0,0,0,0,0]
+        }
+    }
+}
+
 #[test]
 fn bindgen_test_layout_can_frame() {
     assert_eq!(
@@ -161,6 +175,24 @@ pub struct canota_device_ctx__bindgen_ty_1 {
     pub version_major: u8,
     pub reserved0: u8,
 }
+
+/**
+ * Panics if the developer doesn't pass in a slice with 4 elements
+ */
+impl From<&[u8]> for canota_device_ctx__bindgen_ty_1 {
+    fn from(bytes: &[u8]) -> canota_device_ctx__bindgen_ty_1 {
+        if bytes.len() != 4 {
+            panic!("Looks Like a developer Passed in the wrong arguments. Should only pass in slices or length 4");
+        }
+        canota_device_ctx__bindgen_ty_1 {
+            device_type: bytes[0],
+            version_minor: bytes[1],
+            version_major: bytes[2],
+            reserved0: bytes[3]
+        }
+    }
+}
+
 #[test]
 fn bindgen_test_layout_canota_device_ctx__bindgen_ty_1() {
     assert_eq!(
