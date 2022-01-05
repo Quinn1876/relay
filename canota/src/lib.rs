@@ -24,6 +24,7 @@ pub enum Error {
     DeviceUnavailable { short_device_id: u8 },
     RawCommandWriteError,
     RawCommandReadError,
+    ErrorChangingDeviceShortId
 }
 
 
@@ -224,7 +225,7 @@ impl Canota {
         Ok(CanotaDeviceInfo::from(device))
     }
 
-    fn get_device_ref<'a>(&'a mut self, short_device_id: u8) -> Result<&'a canota_sys::canota_device_ctx, Error> {
+    fn get_device_ref<'a>(&'a mut self, short_device_id: u8) -> Result<&'a mut canota_sys::canota_device_ctx, Error> {
         // get a device with self and short_device_id
         let device = unsafe { canota_sys::canota_device_from_short_id(self.ctx, short_device_id) }; // AHHHHH Leaks memory
         if device.is_null() {
@@ -264,4 +265,24 @@ impl Canota {
         }
         Ok(devices)
     }
+
+    pub fn change_short_id(&mut self, old_short_id: u8, new_short_id: u8) -> Result<(), Error> {
+        let device = self.get_device_ref(old_short_id)?;
+        let result = unsafe { canota_sys::canota_change_short_id(device, new_short_id) };
+        if result {
+            Ok(())
+        } else {
+            Err(Error::ErrorChangingDeviceShortId)
+        }
+    }
+
+    pub fn set_mode(&mut self) { todo!(); }
+
+    pub fn reset_device(&mut self) { todo!(); }
+
+    pub fn erase_section(&mut self) { todo!(); }
+
+    pub fn get_checksum_for_section(&mut self) { todo!(); }
+
+    pub fn flash_board(&mut self) { todo!(); }
 }
