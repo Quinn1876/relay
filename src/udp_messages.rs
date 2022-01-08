@@ -76,7 +76,7 @@ impl DesktopStateMessage {
 }
 
 #[derive(Copy, Clone)]
-pub enum Errno {
+pub enum UdpErrno {
     NoError,
     InvalidTransitionRequest,
     ArmingFault,
@@ -84,14 +84,14 @@ pub enum Errno {
     GeneralPodFailure
 }
 
-impl Errno {
+impl UdpErrno {
     pub fn to_byte(&self) -> u8 {
         match self {
-            Errno::NoError                  => 0x0,
-            Errno::InvalidTransitionRequest => 0x1,
-            Errno::ArmingFault              => 0x2,
-            Errno::ControllerTimeout        => 0x3,
-            Errno::GeneralPodFailure        => 0x4
+            UdpErrno::NoError                  => 0x0,
+            UdpErrno::InvalidTransitionRequest => 0x1,
+            UdpErrno::ArmingFault              => 0x2,
+            UdpErrno::ControllerTimeout        => 0x3,
+            UdpErrno::GeneralPodFailure        => 0x4
         }
     }
 }
@@ -99,7 +99,7 @@ impl Errno {
 pub struct PodStateMessage {
     current_state: PodState,
     pending_next_state: PodState,
-    errno: Errno,
+    errno: UdpErrno,
     telemetry: Option<PodData>,
     telemetry_timestamp: NaiveDateTime,
     recovering: bool
@@ -118,7 +118,7 @@ impl PodStateMessage {
         json_data.dump().into_bytes()
     }
 
-    pub fn new(current_state: PodState, pending_next_state: PodState, errno: Errno, telemetry: &PodData, telemetry_timestamp: NaiveDateTime, recovering: bool) -> PodStateMessage {
+    pub fn new(current_state: PodState, pending_next_state: PodState, errno: UdpErrno, telemetry: &PodData, telemetry_timestamp: NaiveDateTime, recovering: bool) -> PodStateMessage {
         PodStateMessage {
             current_state,
             errno,
@@ -129,7 +129,7 @@ impl PodStateMessage {
         }
     }
 
-    pub fn new_no_telemetry(current_state: PodState, pending_next_state: PodState, errno: Errno, telemetry_timestamp: NaiveDateTime, recovering: bool) -> PodStateMessage {
+    pub fn new_no_telemetry(current_state: PodState, pending_next_state: PodState, errno: UdpErrno, telemetry_timestamp: NaiveDateTime, recovering: bool) -> PodStateMessage {
         PodStateMessage {
             current_state,
             errno,

@@ -29,7 +29,7 @@ use crate::stream_utils;
 use crate::can;
 #[cfg(unix)]
 use crate::can::{CanCommand, FrameHandler};
-use crate::udp_messages::{ DesktopStateMessage, Errno, CustomUDPSocket };
+use crate::udp_messages::{ DesktopStateMessage, UdpErrno, CustomUDPSocket };
 use crate::udp_messages;
 use crate::pod_states::PodState;
 use crate::pod_data::PodData;
@@ -316,7 +316,7 @@ pub fn run_threads() -> Result<(), Error> {
         let mut current_pod_state = PodState::LowVoltage; // *************  TODO Figure out what the initial Value for this should be
         let mut next_pod_state = PodState::LowVoltage; // ************* TODO Figure out what the initial Value for this should be
 
-        let mut errno = Errno::NoError;
+        let mut errno = UdpErrno::NoError;
         let mut timeout_counter = 0;
         let mut last_received_telemetry_timestamp = Utc::now().naive_local();
         let mut current_pod_data = PodData::new();
@@ -336,8 +336,8 @@ pub fn run_threads() -> Result<(), Error> {
             tcp_sender.send(TcpMessage::EnteringRecovery).expect("To be able to notify tcp thread that we are entering recovery mode");
         };
 
-        let invalid_transition_recognized = |errno: &mut Errno, server_state: &mut ServerState| {
-            *errno = Errno::InvalidTransitionRequest;
+        let invalid_transition_recognized = |errno: &mut UdpErrno, server_state: &mut ServerState| {
+            *errno = UdpErrno::InvalidTransitionRequest;
             *server_state = ServerState::Recovery;
             notify_recovery();
         };
@@ -425,7 +425,7 @@ pub fn run_threads() -> Result<(), Error> {
                                     if timeout_counter >= udp_max_number_timeouts {
                                         // TODO Enter into Recovery. Assume Desktop Disconnected
                                         notify_recovery();
-                                        errno = Errno::ControllerTimeout;
+                                        errno = UdpErrno::ControllerTimeout;
                                         server_state = ServerState::Recovery;
                                         continue 'udp_main_loop;
                                     }
@@ -442,7 +442,7 @@ pub fn run_threads() -> Result<(), Error> {
                         match message {
                             UDPMessage::PodStateChanged(new_state) => {
                                 if new_state.is_error_state() {
-                                    errno = Errno::GeneralPodFailure;
+                                    errno = UdpErrno::GeneralPodFailure;
                                 }
                                 current_pod_state = new_state;
                             },
@@ -480,7 +480,7 @@ pub fn run_threads() -> Result<(), Error> {
                         match message {
                             UDPMessage::PodStateChanged(new_state) => {
                                 if new_state.is_error_state() {
-                                    errno = Errno::GeneralPodFailure;
+                                    errno = UdpErrno::GeneralPodFailure;
                                 }
                                 current_pod_state = new_state;
                             },
