@@ -10,7 +10,7 @@ use polling::{ Event, Poller };
 use std::io;
 use byteorder::{ LittleEndian, ByteOrder };
 
-use crate::pod_states::PodStates;
+use crate::pod_states::PodState;
 
 #[derive(Clone)]
 pub struct Config {
@@ -63,7 +63,7 @@ fn _run(config: Config) -> Result<(), Error> {
 // can be found here: (Can Communication Protocol) [https://docs.google.com/spreadsheets/d/18rGH__yyJPf3jil74yTlVyFFqCOyuNzP3DCFmmIWWbo/edit#gid=0]
 pub enum CanCommand {
     BmsHealthCheck { battery_pack_current: u32, cell_temperature: u32 },
-    BmsStateChange(PodStates),
+    BmsStateChange(PodState),
     PressureHigh(f32),
     PressureLow1(f32),
     PressureLow2(f32),
@@ -104,9 +104,9 @@ impl FrameHandler for socketcan::CANFrame {
  * to throw an error if the data slice is larger then one, but this would create
  * fragile software without the proper error handling.
  */
-fn get_state_change_data(data: &[u8]) -> PodStates {
-    if data.len() == 0 { PodStates::Invalid }
-    else { PodStates::from_byte(data[0]) }
+fn get_state_change_data(data: &[u8]) -> PodState {
+    if data.len() == 0 { PodState::Invalid }
+    else { PodState::from_byte(data[0]) }
 }
 
 /**

@@ -3,12 +3,12 @@ use json::{
     JsonValue::Number
 };
 use chrono::{ NaiveDateTime };
-use crate::pod_states::PodStates;
+use crate::pod_states::PodState;
 use crate::pod_data::PodData;
 use std::net::UdpSocket;
 
 pub struct DesktopStateMessage {
-    pub requested_state: PodStates,
+    pub requested_state: PodState,
     pub most_recent_timestamp: NaiveDateTime
 }
 
@@ -54,7 +54,7 @@ impl DesktopStateMessage {
                         let requested_state_byte = (requested_state & 0xff) as u8;
                         if let Some(timestamp) = timestamp.as_fixed_point_i64(0) {
                             return Ok(DesktopStateMessage {
-                                requested_state: PodStates::from_byte(requested_state_byte),
+                                requested_state: PodState::from_byte(requested_state_byte),
                                 most_recent_timestamp: NaiveDateTime::from_timestamp(timestamp, 0)
                             });
                         }
@@ -97,8 +97,8 @@ impl Errno {
 }
 
 pub struct PodStateMessage {
-    current_state: PodStates,
-    pending_next_state: PodStates,
+    current_state: PodState,
+    pending_next_state: PodState,
     errno: Errno,
     telemetry: Option<PodData>,
     telemetry_timestamp: NaiveDateTime,
@@ -118,7 +118,7 @@ impl PodStateMessage {
         json_data.dump().into_bytes()
     }
 
-    pub fn new(current_state: PodStates, pending_next_state: PodStates, errno: Errno, telemetry: &PodData, telemetry_timestamp: NaiveDateTime, recovering: bool) -> PodStateMessage {
+    pub fn new(current_state: PodState, pending_next_state: PodState, errno: Errno, telemetry: &PodData, telemetry_timestamp: NaiveDateTime, recovering: bool) -> PodStateMessage {
         PodStateMessage {
             current_state,
             errno,
@@ -129,7 +129,7 @@ impl PodStateMessage {
         }
     }
 
-    pub fn new_no_telemetry(current_state: PodStates, pending_next_state: PodStates, errno: Errno, telemetry_timestamp: NaiveDateTime, recovering: bool) -> PodStateMessage {
+    pub fn new_no_telemetry(current_state: PodState, pending_next_state: PodState, errno: Errno, telemetry_timestamp: NaiveDateTime, recovering: bool) -> PodStateMessage {
         PodStateMessage {
             current_state,
             errno,

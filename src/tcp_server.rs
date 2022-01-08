@@ -31,7 +31,7 @@ use crate::can;
 use crate::can::{CanCommand, FrameHandler};
 use crate::udp_messages::{ DesktopStateMessage, Errno, CustomUDPSocket };
 use crate::udp_messages;
-use crate::pod_states::PodStates;
+use crate::pod_states::PodState;
 use crate::pod_data::PodData;
 
 #[cfg(test)]
@@ -210,12 +210,12 @@ pub enum CanError {
 // START TODO: Move Section to own file
 #[cfg(unix)]
 trait RelayCan {
-    fn send_pod_state(&self, state: &PodStates) -> Result<(), CanError>;
+    fn send_pod_state(&self, state: &PodState) -> Result<(), CanError>;
 }
 
 #[cfg(feature = "socketcan")]
 impl RelayCan for CANSocket {
-    fn send_pod_state(&self, state: &PodStates) -> Result<(), CanError> {
+    fn send_pod_state(&self, state: &PodState) -> Result<(), CanError> {
         self.write_frame_insist(
             &CANFrame::new(0, &[state.to_byte()], false, false).map_err(|e| CanError::MessageError(e))?
         ).map_err(|e| CanError::WriteError(e))
@@ -225,7 +225,7 @@ impl RelayCan for CANSocket {
 
 // Describes a message that can be sent to the CAN thread
 enum CANMessage {
-    ChangeState(PodStates)
+    ChangeState(PodState)
 }
 
 #[derive(Debug)]
@@ -234,7 +234,7 @@ enum UDPMessage {
     DisconnectFromHost,
     StartupComplete,
     #[allow(dead_code)] // Not Dead, only constructed when running in unix, but the udp socket needs to be able to check it in all cases
-    PodStateChanged(PodStates),
+    PodStateChanged(PodState),
     #[allow(dead_code)]
     TelemetryDataAvailable(PodData, NaiveDateTime)
 }
@@ -313,8 +313,8 @@ pub fn run_threads() -> Result<(), Error> {
 
         let mut server_state = ServerState::Startup;
 
-        let mut current_pod_state = PodStates::LowVoltage; // *************  TODO Figure out what the initial Value for this should be
-        let mut next_pod_state = PodStates::LowVoltage; // ************* TODO Figure out what the initial Value for this should be
+        let mut current_pod_state = PodState::LowVoltage; // *************  TODO Figure out what the initial Value for this should be
+        let mut next_pod_state = PodState::LowVoltage; // ************* TODO Figure out what the initial Value for this should be
 
         let mut errno = Errno::NoError;
         let mut timeout_counter = 0;
@@ -346,7 +346,7 @@ pub fn run_threads() -> Result<(), Error> {
             *last_received_telemetry_timestamp = timestamp;
         };
 
-        let trigger_transition_to_new_state = |next_pod_state: &mut PodStates, requested_state: PodStates| {
+        let trigger_transition_to_new_state = |next_pod_state: &mut PodState, requested_state: PodState| {
             can_message_sender.send(CANMessage::ChangeState(requested_state.clone())).expect("Should be able to Send a message to the Can thread from the UDP thread");
             *next_pod_state = requested_state;
         };
@@ -497,26 +497,26 @@ pub fn run_threads() -> Result<(), Error> {
                         }
                     }
                     match current_pod_state {
-                        PodStates::LowVoltage => {
+                        PodState::LowVoltage => {
                             server_state = ServerState::Disconnected;
                             tcp_sender.send(TcpMessage::RecoveryComplete).expect("To be able to send message");
                         },
-                        PodStates::Armed => {
+                        PodState::Armed => {
                             // transision to lowVoltage
-                            if next_pod_state != PodStates::LowVoltage {
-                                trigger_transition_to_new_state(&mut next_pod_state, PodStates::LowVoltage);
+                            if next_pod_state != PodState::LowVoltage {
+                                trigger_transition_to_new_state(&mut next_pod_state, PodState::LowVoltage);
                             }
                         },
-                        PodStates::AutoPilot => {
+                        PodState::AutoPilot => {
                             //transition to braking
-                            if next_pod_state != PodStates::Braking {
-                                trigger_transition_to_new_state(&mut next_pod_state, PodStates::Braking);
+                            if next_pod_state != PodState::Braking {
+                                trigger_transition_to_new_state(&mut next_pod_state, PodState::Braking);
                             }
                         },
-                        PodStates::Braking => {
+                        PodState::Braking => {
                             // wait till regression to lv
-                            if next_pod_state != PodStates::LowVoltage {
-                                trigger_transition_to_new_state(&mut next_pod_state, PodStates::LowVoltage)
+                            if next_pod_state != PodState::LowVoltage {
+                                trigger_transition_to_new_state(&mut next_pod_state, PodState::LowVoltage)
                             }
                         },
                         state => {
@@ -560,8 +560,8 @@ pub fn run_threads() -> Result<(), Error> {
             if cfg!(unix) {
                 let socket = socketcan::CANSocket::open(can_interface).expect(&format!("Unable to Connect to CAN interface: {}", can_interface));
 
-                let mut requested_pod_state = PodStates::LowVoltage;
-                let mut bms_state = PodStates::LowVoltage;
+                let mut requested_pod_state = PodState::LowVoltage;
+                let mut bms_state = PodState::LowVoltage;
                 // TODO: IMPLE mc_state
 
                 socket.set_read_timeout(can_socket_read_timeout).expect("Unable to Set Timeout on CAN Socket");
@@ -593,7 +593,7 @@ pub fn run_threads() -> Result<(), Error> {
                     }
 
                     let message_result;
-                    if requested_pod_state == bms_state && requested_pod_state == PodStates::AutoPilot {
+                    if requested_pod_state == bms_state && requested_pod_state == PodState::AutoPilot {
                         message_result = socket.set_motor_throttle(1, 1, 100); // TODO move this into config
                     } else {
                         message_result = socket.send_pod_state(&requested_pod_state);
