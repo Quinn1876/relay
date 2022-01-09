@@ -17,9 +17,9 @@ use std::sync::mpsc::{
     Receiver
 };
 
-use super::worker_states::*;
-use super::messages::*;
-use super::main_loop::*;
+use super::super::worker_states::*;
+use super::super::messages::*;
+use super::super::main_loop::*;
 
 #[repr(C)] // Required for type transmutations
 pub struct UdpWorker<State = Startup> {

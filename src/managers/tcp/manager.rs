@@ -1,9 +1,10 @@
-use super::tcp_worker::TcpWorkerState;
+use super::worker::TcpWorkerState;
 use std::sync::mpsc::{
     Sender,
     Receiver
 };
-use super::messages::*;
+use super::super::messages::*;
+use super::super::main_loop::WorkerStateTrait;
 pub struct TcpManager {
 }
 

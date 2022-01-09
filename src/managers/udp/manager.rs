@@ -1,11 +1,12 @@
-use super::udp_worker::UdpWorkerState;
+use super::worker::UdpWorkerState;
 use std::sync::mpsc::{
     Sender,
     Receiver
 };
-use super::messages::*;
+use super::super::messages::*;
 pub struct UdpManager {
 }
+use super::super::main_loop::WorkerStateTrait;
 
 impl UdpManager {
     pub fn run(

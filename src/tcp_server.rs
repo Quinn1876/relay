@@ -205,12 +205,12 @@ enum WorkerMessage {
     CanFrameAndTimeStamp(CANFrame, NaiveDateTime)
 }
 
-use crate::workers::messages::{
+use crate::managers::messages::{
     TcpMessage,
     UDPMessage,
     CanMessage as CANMessage
 };
-use crate::workers;
+use crate::managers;
 use crate::error::Error;
 
 pub fn run_threads() -> Result<(), Error> {
@@ -236,8 +236,8 @@ pub fn run_threads() -> Result<(), Error> {
     // End CAN Configuration
 
     // Thread Handles
-    let tcp_handle = workers::TcpManager::run("0.0.0.0:8080", udp_message_sender.clone(), tcp_receiver, tcp_message_buffer_size);
-    let udp_handle = workers::UdpManager::run(can_message_sender.clone(), tcp_sender.clone(), udp_message_receiver,udp_max_number_timeouts);
+    let tcp_handle = managers::TcpManager::run("0.0.0.0:8080", udp_message_sender.clone(), tcp_receiver, tcp_message_buffer_size);
+    let udp_handle = managers::UdpManager::run(can_message_sender.clone(), tcp_sender.clone(), udp_message_receiver,udp_max_number_timeouts);
 
     #[allow(unused_doc_comments)]
     /**
