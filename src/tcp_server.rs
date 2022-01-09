@@ -165,27 +165,6 @@ impl Config<SocketAddr> {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-enum RequestTypes {
-    Connect,
-    Disconnect,
-    Unknown
-}
-
-#[derive(Debug)]
-pub enum Error {
-    InvalidState(&'static str),
-    TcpSocketError(std::io::Error),
-    UdpSocketError(std::io::Error),
-    #[cfg(unix)]
-    CanSocketError(can::Error),
-    PollerError(std::io::Error),
-    InvalidAddr(std::io::Error),
-    UninitializedUdpSocket,
-    UninitializedCanSocket,
-    AddrParseError,
-}
-
 #[derive(PartialEq, Copy, Clone, Debug)]
 enum ServerState {
     Startup,
@@ -232,6 +211,7 @@ use crate::workers::messages::{
     CanMessage as CANMessage
 };
 use crate::workers;
+use crate::error::Error;
 
 pub fn run_threads() -> Result<(), Error> {
     let (udp_message_sender, udp_message_receiver): (Sender<UDPMessage>, Receiver<UDPMessage>) = channel();
@@ -256,46 +236,8 @@ pub fn run_threads() -> Result<(), Error> {
     // End CAN Configuration
 
     // Thread Handles
-    let tcp_handle;
-    let udp_handle;
-    // End Thread Handles
-
-
-    /// Start Main threads
-    /// TCP
-    /// UDP
-    /// CAN
-    /// Worker
-
-    // TCP Thread
-    {
-        let udp_message_sender = udp_message_sender.clone(); // Clone before moving into thread
-        tcp_handle = std::thread::Builder::new().name("TCP Thread".to_string()).spawn(move || {
-            // Open and Bind to port 8080 TODO: Move into config
-            let listener = TcpListener::bind("0.0.0.0:8080").expect("Should be able to connect");
-            let mut request_parser = requests::RequestParser::new();
-            initialize_request_parser(&mut request_parser);
-
-            let mut server_state = ServerState::Disconnected;
-            udp_message_sender.send(UDPMessage::StartupComplete).expect("Unable to send Message to UDP Thread to notify startup complete");
-
-            // accept connections and process them sequentially
-            for stream in listener.incoming() {
-                match stream {
-                    Ok(stream) => handle_tcp_socket_event(stream, &request_parser, tcp_message_buffer_size, &udp_message_sender, &mut server_state, &tcp_receiver).unwrap(),
-                    Err(e) => println!("An Error Occurred While Handling a TCP Connection: {:?}", e),
-                }
-            }
-        }).expect("Should be able to create Thread");
-    }
-    // UDP Thread
-    udp_handle = std::thread::Builder::new().name("UDP Thread".to_string()).spawn(move || {
-        // Setup
-        let mut udp_worker = workers::udp_worker::UdpWorkerState::new(can_message_sender, tcp_sender, udp_message_receiver, udp_max_number_timeouts);
-        loop {
-            udp_worker = udp_worker.main_loop();
-        }
-    }).expect("Should be able to create Thread");
+    let tcp_handle = workers::TcpManager::run("0.0.0.0:8080", udp_message_sender.clone(), tcp_receiver, tcp_message_buffer_size);
+    let udp_handle = workers::UdpManager::run(can_message_sender.clone(), tcp_sender.clone(), udp_message_receiver,udp_max_number_timeouts);
 
     #[allow(unused_doc_comments)]
     /**
@@ -410,109 +352,6 @@ pub fn run_threads() -> Result<(), Error> {
     udp_handle.join().expect("Should be able to join at the end of the Program");
     tcp_handle.join().expect("Should be able to join at the end of the Program");
 
-    Ok(())
-}
-
-fn initialize_request_parser(request_parser: &mut requests::RequestParser<RequestTypes>) {
-    /*
-    * Add Supported TCP Queries here
-    * Each Query string will correspond to a RequestType
-    * Each Request Type will have a corresponding handler function which is ran
-    * when the match occurs
-    */
-    request_parser.insert("CONNECT\r\n", RequestTypes::Connect);
-    request_parser.insert("DISCONNECT\r\n", RequestTypes::Disconnect);
-    request_parser.insert("@@Failed@@\r\n", RequestTypes::Unknown); // Special Message which is written into the request in the event of an error reading the message
-}
-
-trait CustomTcpStream {
-    fn write_message(&mut self, buf: &[u8]) -> Result<usize, Error>;
-}
-
-impl CustomTcpStream for TcpStream {
-    fn write_message(&mut self, buf: &[u8]) -> Result<usize, Error> {
-        self.write(buf).map_err(|e| Error::TcpSocketError(e))
-    }
-}
-
-/**
- * @func handle_tcp_socket_event
- * @brief
- */
-fn handle_tcp_socket_event(
-    mut stream: TcpStream,
-    request_parser: &requests::RequestParser<RequestTypes>,
-    buffer_size: usize,
-    udp_sender: &Sender<UDPMessage>,
-    server_state: &mut ServerState,
-    tcp_receiver: &Receiver<TcpMessage>
-) -> Result<(), Error> {
-    let mut addr = stream.peer_addr().map_err(|e| Error::TcpSocketError(e))?;
-    println!("Connected to a new stream with addr: {}", addr);
-    let request = stream_utils::read_all(&mut stream, buffer_size).unwrap_or(b"@@Failed@@\r\n".to_vec());
-    println!("Request: \n{}", std::str::from_utf8(&request).unwrap());
-
-    // Handle any Messages from the other threads before Handling the Connection
-    while let Ok(message) = tcp_receiver.try_recv() {
-        match message {
-            TcpMessage::EnteringRecovery => *server_state = ServerState::Recovery,
-            TcpMessage::RecoveryComplete => *server_state = ServerState::Disconnected,
-        }
-    }
-
-    let mut new_state = *server_state;
-    /* Remove the Query String from the request and match it to the associated handler function */
-    match request_parser.strip_line_and_get_value(request.as_slice()) {
-        requests::RequestParserResult::Success((&value, _request)) => {
-            match value {
-                RequestTypes::Connect => {
-                    println!("Connection Attempt received");
-                    match server_state {
-                        ServerState::Disconnected => {
-                            addr.set_port(8888);
-                            udp_sender.send(UDPMessage::ConnectToHost(addr)).expect("Should be able to send Message to UDP Socket from TCP Socket");
-                            stream.write_message(b"OK 8888")?; // Tell the Handshake requester what udp port to listen on
-                            new_state = ServerState::Connected;
-                        },
-                        ServerState::Connected => {
-                            stream.write_message(b"ERROR POD Already Connected to Controller")?;
-                        },
-                        ServerState::Startup => {
-                            panic!("TCP Socket should not be accepting connections in the Startup State");
-                        },
-                        ServerState::Recovery => {
-                            stream.write_message(b"ERROR Unable to Connect to Pod while recovering. Please Wait for recovery to finish")?;
-                        }
-                    }
-                },
-                RequestTypes::Disconnect => {
-                    match server_state {
-                        ServerState::Connected => {
-                            println!("TCP THREAD: Disconnect Received");
-                            udp_sender.send(UDPMessage::DisconnectFromHost).expect("Should be able to send message to UDP socket");
-                            stream.write_message(b"DISCONNECTED")?;
-                            new_state = ServerState::Recovery;
-                        },
-                        _ => {
-                            println!("TCP HANDLER: Received a disconnect request while not connected");
-                            stream.write_message(b"DISCONNECTED")?;
-                        }
-                    }
-                },
-                RequestTypes::Unknown => {
-                    println!("Received a Malformed Input");
-                }
-                _ => {
-                    println!("RequestTypeParsed: {:?}", value);
-                }
-            }
-        },
-        requests::RequestParserResult::InvalidRequest => {
-            println!("Invalid Request Received");
-        },
-        _ => {}
-    };
-    *server_state = new_state;
     Ok(())
 }
 

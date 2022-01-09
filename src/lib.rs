@@ -17,3 +17,4 @@ pub mod udp_messages;
 pub mod pod_states;
 pub mod pod_data;
 pub mod workers;
+pub mod error;

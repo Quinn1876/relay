@@ -1,6 +1,5 @@
 use std::net::{
     UdpSocket,
-    SocketAddr
 };
 use crate::{
     pod_data,
@@ -20,7 +19,9 @@ use std::sync::mpsc::{
 
 use super::worker_states::*;
 use super::messages::*;
+use super::main_loop::*;
 
+#[repr(C)] // Required for type transmutations
 pub struct UdpWorker<State = Startup> {
     udp_socket: UdpSocket,
     current_pod_state: pod_states::PodState,
@@ -129,65 +130,28 @@ impl<State> UdpWorker<State> {
             state: std::marker::PhantomData
         }
     }
+
+    /**
+     * ALERT: Unsafe code!!!!!
+     * Why it's safe:
+     * std::mem::transmute takes one object and tells the compiler to treat it like another object. It is very easy to
+     * screw this up when using pointers as the compiler would not be able to determine if the new types would be the same size upon dereference.
+     * Thankfully, here we are only changing the meta data about the type. This means that the type itself is the same size and contains the same information.
+     * We still need to be careful though!! The TcpWorker Struct is a generic type. Due to rules of Rust struct representation, two structs who differ only in
+     * PhantomData types cannot be assumed to have the same layout in memory. This is why we opt to use the C representation of  the struct. While it is not as
+     * efficient in terms of storage, it will always give us a consistent layout in memory which is important for these operations to work properly
+     */
     fn EnterRecovery(self) -> UdpWorker<Recovery> {
-        UdpWorker {
-            udp_socket: self.udp_socket,
-            current_pod_state: self.current_pod_state,
-            next_pod_state: self.next_pod_state,
-            errno: self.errno,
-            timeout_counter: self.timeout_counter,
-            last_received_telemetry_timestamp: self.last_received_telemetry_timestamp,
-            current_pod_data: self.current_pod_data,
-            current_telemetry_timestamp: self.current_telemetry_timestamp,
-            tcp_sender: self.tcp_sender,
-            udp_message_receiver: self.udp_message_receiver,
-            can_message_sender: self.can_message_sender,
-            udp_max_number_timeouts: self.udp_max_number_timeouts,
-            state: std::marker::PhantomData
-        }
+        unsafe { std::mem::transmute(self) }
     }
     fn EnterConnected(self) -> UdpWorker<Connected> {
-        UdpWorker {
-            udp_socket: self.udp_socket,
-            current_pod_state: self.current_pod_state,
-            next_pod_state: self.next_pod_state,
-            errno: self.errno,
-            timeout_counter: self.timeout_counter,
-            last_received_telemetry_timestamp: self.last_received_telemetry_timestamp,
-            current_pod_data: self.current_pod_data,
-            current_telemetry_timestamp: self.current_telemetry_timestamp,
-            tcp_sender: self.tcp_sender,
-            can_message_sender: self.can_message_sender,
-            udp_message_receiver: self.udp_message_receiver,
-            udp_max_number_timeouts: self.udp_max_number_timeouts,
-            state: std::marker::PhantomData
-        }
+        unsafe { std::mem::transmute(self) }
     }
     fn EnterDisconnected(self) -> UdpWorker<Disconnected> {
-        UdpWorker {
-            udp_socket: self.udp_socket,
-            current_pod_state: self.current_pod_state,
-            next_pod_state: self.next_pod_state,
-            errno: self.errno,
-            timeout_counter: self.timeout_counter,
-            last_received_telemetry_timestamp: self.last_received_telemetry_timestamp,
-            current_pod_data: self.current_pod_data,
-            current_telemetry_timestamp: self.current_telemetry_timestamp,
-            tcp_sender: self.tcp_sender,
-            udp_message_receiver: self.udp_message_receiver,
-            can_message_sender: self.can_message_sender,
-            udp_max_number_timeouts: self.udp_max_number_timeouts,
-            state: std::marker::PhantomData
-        }
+        unsafe { std::mem::transmute(self) }
     }
 }
-
-pub enum UdpWorkerState {
-    Startup(UdpWorker<Startup>),
-    Recovery(UdpWorker<Recovery>),
-    Connected(UdpWorker<Connected>),
-    Disconnected(UdpWorker<Disconnected>)
-}
+pub type UdpWorkerState = WorkerState<UdpWorker<Startup>, UdpWorker<Recovery>, UdpWorker<Connected>, UdpWorker<Disconnected>>;
 
 impl UdpWorkerState {
     pub fn new(
@@ -199,23 +163,9 @@ impl UdpWorkerState {
         let worker: UdpWorker<Startup> = UdpWorker::<Startup>::new(can_sender, tcp_sender, udp_receiver, udp_max_number_timeouts);
         UdpWorkerState::Startup(worker)
     }
-
-    pub fn main_loop(self) -> Self {
-        match self {
-            // TODO Automate this with a macro
-            UdpWorkerState::Startup(worker) => worker.main_loop(),
-            UdpWorkerState::Disconnected(worker) => worker.main_loop(),
-            UdpWorkerState::Connected(worker) => worker.main_loop(),
-            UdpWorkerState::Recovery(worker) => worker.main_loop(),
-        }
-    }
 }
 
-pub trait UdpMainLoop {
-    fn main_loop(self) -> UdpWorkerState;
-}
-
-impl UdpMainLoop for UdpWorker<Startup> {
+impl MainLoop<UdpWorkerState> for UdpWorker<Startup> {
     fn main_loop(self) ->  UdpWorkerState {
         match self.get_udp_receiver_message_or_panic() {
             UDPMessage::StartupComplete => {
@@ -229,7 +179,7 @@ impl UdpMainLoop for UdpWorker<Startup> {
     }
 }
 
-impl UdpMainLoop for UdpWorker<Disconnected> {
+impl MainLoop<UdpWorkerState> for UdpWorker<Disconnected> {
     fn main_loop(self) -> UdpWorkerState {
         match self.get_udp_receiver_message_or_panic() {
             UDPMessage::ConnectToHost(addr) => {
@@ -248,7 +198,7 @@ impl UdpMainLoop for UdpWorker<Disconnected> {
     }
 }
 
-impl UdpMainLoop for UdpWorker<Connected> {
+impl MainLoop<UdpWorkerState> for UdpWorker<Connected> {
     fn main_loop(mut self) -> UdpWorkerState {
         let mut socket_buffer = [0u8; 1024];
         match self.udp_socket.recv(&mut socket_buffer) {
@@ -335,7 +285,7 @@ impl UdpMainLoop for UdpWorker<Connected> {
     }
 }
 
-impl UdpMainLoop for UdpWorker<Recovery> {
+impl MainLoop<UdpWorkerState> for UdpWorker<Recovery> {
     fn main_loop(mut self) -> UdpWorkerState {
         self.send_pod_state_message();
         while let Ok(message) = self.udp_message_receiver.try_recv() {
