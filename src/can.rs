@@ -6,7 +6,6 @@
  */
 use socketcan::CANSocket;
 use std::fs;
-use polling::{ Event, Poller };
 use std::io;
 use byteorder::{ LittleEndian, ByteOrder };
 
@@ -41,20 +40,6 @@ pub enum Error {
 
 pub fn open_socket(config: &Config) -> Result<CANSocket, Error> {
     Ok(CANSocket::open(&config.interface_name).map_err(|e| Error::FailedToOpenSocket(e))?)
-}
-
-fn _run(config: Config) -> Result<(), Error> {
-    let socket = CANSocket::open(&config.interface_name).map_err(|e| Error::FailedToOpenSocket(e))?;
-    let socket_key = 21;
-    let socket_poller = Poller::new().map_err(|e| Error::PollerError(e))?;
-
-    socket_poller.add(&socket, Event::readable(socket_key)).map_err(|e| Error::PollerError(e))?;
-
-    let mut messages = Vec::new();
-    loop {
-        messages.clear();
-        socket_poller.wait(&mut messages, None).map_err(|e| Error::PollerError(e))?;
-    }
 }
 
 

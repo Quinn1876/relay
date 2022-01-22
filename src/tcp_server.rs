@@ -173,7 +173,7 @@ enum ServerState {
     Recovery
 }
 
-#[cfg(feature = "socketcan")]
+#[cfg(unix)]
 #[derive(Debug)]
 pub enum CanError {
     MessageError(socketcan::ConstructionError),
@@ -183,12 +183,12 @@ pub enum CanError {
 // START TODO: Move Section to own file
 #[cfg(unix)]
 trait RelayCan {
-    fn send_pod_state(&self, state: &PodState) -> Result<(), CanError>;
+    fn send_pod_state(&self, state: &crate::pod_states::PodState) -> Result<(), CanError>;
 }
 
-#[cfg(feature = "socketcan")]
+#[cfg(unix)]
 impl RelayCan for CANSocket {
-    fn send_pod_state(&self, state: &PodState) -> Result<(), CanError> {
+    fn send_pod_state(&self, state: &crate::pod_states::PodState) -> Result<(), CanError> {
         self.write_frame_insist(
             &CANFrame::new(0, &[state.to_byte()], false, false).map_err(|e| CanError::MessageError(e))?
         ).map_err(|e| CanError::WriteError(e))
@@ -202,7 +202,7 @@ impl RelayCan for CANSocket {
 
 #[cfg(unix)]
 enum WorkerMessage {
-    CanFrameAndTimeStamp(CANFrame, NaiveDateTime)
+    CanFrameAndTimeStamp(CANFrame, chrono::NaiveDateTime)
 }
 
 use crate::managers::messages::{
@@ -255,14 +255,14 @@ pub fn run_threads() -> Result<(), Error> {
      */
     #[cfg(unix)]
     {
-        let udpSender = udpSender.clone();
+        let udpSender = udp_message_sender.clone();
         std::thread::Builder::new().name("CAN Thread".to_string()).spawn(move || {
             // Initialization
             if cfg!(unix) {
                 let socket = socketcan::CANSocket::open(can_interface).expect(&format!("Unable to Connect to CAN interface: {}", can_interface));
 
-                let mut requested_pod_state = PodState::LowVoltage;
-                let mut bms_state = PodState::LowVoltage;
+                let mut requested_pod_state = crate::pod_states::PodState::LowVoltage;
+                let mut bms_state = crate::pod_states::PodState::LowVoltage;
                 // TODO: IMPLE mc_state
 
                 socket.set_read_timeout(can_socket_read_timeout).expect("Unable to Set Timeout on CAN Socket");
@@ -279,7 +279,7 @@ pub fn run_threads() -> Result<(), Error> {
                             bms_state = newState;
                             udpSender.send(UDPMessage::PodStateChanged(newState)).expect("To Be able to send message to udp from can");
                         }
-                        worker_message_sender.send(WorkerMessage::CanFrameAndTimeStamp(frame, Utc::now().naive_local())).expect("Unable to send message from CAN Thread on Worker Channel");
+                        worker_message_sender.send(WorkerMessage::CanFrameAndTimeStamp(frame, chrono::Utc::now().naive_local())).expect("Unable to send message from CAN Thread on Worker Channel");
                     } else {
                         // ERROR Reading from Can socket
                     }
@@ -294,7 +294,7 @@ pub fn run_threads() -> Result<(), Error> {
                     }
 
                     let message_result;
-                    if requested_pod_state == bms_state && requested_pod_state == PodState::AutoPilot {
+                    if requested_pod_state == bms_state && requested_pod_state == crate::pod_states::PodState::AutoPilot {
                         message_result = socket.set_motor_throttle(1, 1, 100); // TODO move this into config
                     } else {
                         message_result = socket.send_pod_state(&requested_pod_state);
@@ -315,7 +315,7 @@ pub fn run_threads() -> Result<(), Error> {
     // Initialization
     #[cfg(unix)]
     {
-        let mut pod_data = PodData::new();
+        let mut pod_data = crate::pod_data::PodData::new();
         loop {
             match worker_message_receiver.recv() {
                 Ok(message) => {
@@ -335,7 +335,7 @@ pub fn run_threads() -> Result<(), Error> {
                                 }
                             }
                             if new_data {
-                                udpSender.send(UDPMessage::TelemetryDataAvailable(pod_data, time)).expect("To be able to send telemetry data to udp from worker");
+                                udp_message_sender.send(UDPMessage::TelemetryDataAvailable(pod_data, time)).expect("To be able to send telemetry data to udp from worker");
                             }
                         }
                     }

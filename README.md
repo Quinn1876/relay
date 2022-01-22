@@ -44,3 +44,5 @@ Rust for Rustaceans by Jon GJENGSET
 The Rust Book
 
 [Socket Can Documentation](https://www.kernel.org/doc/html/latest/networking/can.html)
+
+[Setting Up VCAN on WSL2](https://github.com/microsoft/WSL/issues/5533)

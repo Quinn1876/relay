@@ -4,7 +4,7 @@ pub enum Error {
     TcpSocketError(std::io::Error),
     UdpSocketError(std::io::Error),
     #[cfg(unix)]
-    CanSocketError(can::Error),
+    CanSocketError(crate::can::Error),
     PollerError(std::io::Error),
     InvalidAddr(std::io::Error),
     UninitializedUdpSocket,
