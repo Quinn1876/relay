@@ -1,4 +1,6 @@
 use std::net::SocketAddr;
+#[cfg(unix)]
+use socketcan::CANFrame;
 use crate::{
     pod_data,
     pod_states
@@ -8,12 +10,13 @@ pub enum TcpMessage {
     EnteringRecovery,
     #[allow(dead_code)] // Not Dead, but it's only constructed when running in unix
     RecoveryComplete,
+    UdpFailedToConnect,
 }
 
 
 #[derive(Debug)]
 pub enum UDPMessage {
-    ConnectToHost(SocketAddr),
+    ConnectToDesktop(SocketAddr),
     DisconnectFromHost,
     StartupComplete,
     #[allow(dead_code)] // Not Dead, only constructed when running in unix, but the udp socket needs to be able to check it in all cases
@@ -24,4 +27,8 @@ pub enum UDPMessage {
 
 pub enum CanMessage {
     ChangeState(pod_states::PodState)
+}
+
+pub enum WorkerMessage {
+    CanFrameAndTimeStamp(CANFrame, chrono::NaiveDateTime)
 }

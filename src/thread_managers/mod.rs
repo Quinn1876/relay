@@ -8,6 +8,8 @@ pub mod messages;
 mod main_loop;
 mod udp;
 mod tcp;
+mod can;
 
 pub use udp::UdpManager;
 pub use tcp::TcpManager;
+pub use can::{ CanManager, CanWorkerInitializer };

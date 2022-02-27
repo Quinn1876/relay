@@ -105,6 +105,9 @@ impl PodState {
         }
     }
 
+    /**
+     * @brief validates state transitions
+     */
     pub fn can_transition_to(&self, new_state: &PodState) -> bool {
         match self {
             PodState::Resting => matches!(new_state, PodState::LowVoltage),
@@ -126,3 +129,16 @@ impl PodState {
         matches!(self, PodState::EmergencyBrake | PodState::SystemFailure)
     }
 }
+
+impl From<u8> for PodState {
+    fn from(byte: u8) -> PodState {
+        return PodState::from_byte(byte);
+    }
+}
+
+impl Into<u8> for &PodState {
+    fn into(self) -> u8 {
+        return self.to_byte();
+    }
+}
+

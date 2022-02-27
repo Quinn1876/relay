@@ -107,12 +107,15 @@ impl TcpWorker {
  * efficient in terms of storage, it will always give us a consistent layout in memory which is important for these operations to work properly.
  */
 impl<State> TcpWorker<State> {
+    #[allow(non_snake_case)]
     fn EnterRecovery(self) -> TcpWorker<Recovery> {
         unsafe { std::mem::transmute::<TcpWorker<State>, TcpWorker<Recovery>>(self) }
     }
+    #[allow(non_snake_case)]
     fn EnterConnected(self) -> TcpWorker<Connected> {
         unsafe { std::mem::transmute::<TcpWorker<State>, TcpWorker<Connected>>(self) }
     }
+    #[allow(non_snake_case)]
     fn EnterDisconnected(self) -> TcpWorker<Disconnected> {
         unsafe { std::mem::transmute::<TcpWorker<State>, TcpWorker<Disconnected>>(self) }
     }
@@ -124,7 +127,8 @@ impl MainLoop<TcpWorkerState> for TcpWorker<Disconnected> {
         while let Ok(message) = self.tcp_message_receiver.try_recv() {
             match message {
                 TcpMessage::EnteringRecovery => return TcpWorkerState::Recovery(self.EnterRecovery()),
-                TcpMessage::RecoveryComplete => return TcpWorkerState::Disconnected(self.EnterDisconnected()),
+                TcpMessage::RecoveryComplete => return TcpWorkerState::Disconnected(self),
+                TcpMessage::UdpFailedToConnect => return TcpWorkerState::Disconnected(self)
             }
         }
         // Check for incoming connections on TCP Socket
@@ -134,7 +138,7 @@ impl MainLoop<TcpWorkerState> for TcpWorker<Disconnected> {
                     // do something with the TcpStream
                     match self.handle_connection(s) {
                         Ok(result) => match result {
-                            RequestTypes::Connect => {},
+                            RequestTypes::Connect => return TcpWorkerState::Connected(self.EnterConnected()),
                             _ => return TcpWorkerState::Disconnected(self),
                         },
                         Err(err) => {
@@ -169,9 +173,9 @@ impl TcpWorker<Disconnected> {
                 match value {
                     RequestTypes::Connect => {
                         println!("Connection Attempt received");
-                        addr.set_port(8888);
-                        self.udp_message_sender.send(UDPMessage::ConnectToHost(addr)).expect("Should be able to send Message to UDP Socket from TCP Socket");
-                        stream.write_message(b"OK 8888")?; // Tell the Handshake requester what udp port to listen on
+                        addr.set_port(8081);
+                        self.udp_message_sender.send(UDPMessage::ConnectToDesktop(addr)).expect("Should be able to send Message to UDP Socket from TCP Socket");
+                        stream.write_message(b"OK 8081 8080")?;
                     },
                     RequestTypes::Disconnect => {
                         println!("TCP HANDLER: Received a disconnect request while not connected");
@@ -179,9 +183,6 @@ impl TcpWorker<Disconnected> {
                     },
                     RequestTypes::Unknown => {
                         println!("Received a Malformed Input");
-                    }
-                    _ => {
-                        println!("RequestTypeParsed: {:?}", value);
                     }
                 }
                 return Ok(value);
@@ -195,7 +196,6 @@ impl TcpWorker<Disconnected> {
     }
 }
 
-
 impl MainLoop<TcpWorkerState> for TcpWorker<Connected> {
     fn main_loop(mut self) -> TcpWorkerState {
         // Check for notifications from the other threads
@@ -203,6 +203,7 @@ impl MainLoop<TcpWorkerState> for TcpWorker<Connected> {
             match message {
                 TcpMessage::EnteringRecovery => return TcpWorkerState::Recovery(self.EnterRecovery()),
                 TcpMessage::RecoveryComplete => return TcpWorkerState::Disconnected(self.EnterDisconnected()),
+                TcpMessage::UdpFailedToConnect => return TcpWorkerState::Disconnected(self.EnterDisconnected())
             }
         }
         // Check for incoming connections on TCP Socket
@@ -256,9 +257,6 @@ impl TcpWorker<Connected> {
                     RequestTypes::Unknown => {
                         println!("Received a Malformed Input");
                     }
-                    _ => {
-                        println!("RequestTypeParsed: {:?}", value);
-                    }
                 }
                 return Ok(value);
             },
@@ -279,6 +277,7 @@ impl MainLoop<TcpWorkerState> for TcpWorker<Recovery> {
             match message {
                 TcpMessage::EnteringRecovery => return TcpWorkerState::Recovery(self.EnterRecovery()),
                 TcpMessage::RecoveryComplete => return TcpWorkerState::Disconnected(self.EnterDisconnected()),
+                TcpMessage::UdpFailedToConnect => {} // Continue in Recovery
             }
         }
         // Check for incoming connections on TCP Socket
@@ -327,9 +326,6 @@ impl TcpWorker<Recovery> {
                     },
                     RequestTypes::Unknown => {
                         println!("Received a Malformed Input");
-                    }
-                    _ => {
-                        println!("RequestTypeParsed: {:?}", value);
                     }
                 }
             },

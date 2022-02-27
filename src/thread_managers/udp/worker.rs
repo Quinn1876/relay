@@ -1,21 +1,23 @@
 use std::net::{
     UdpSocket,
 };
-use crate::{
-    pod_data,
-    pod_states,
-    udp_messages,
-    udp_messages::{
-        UdpErrno
-    }
-};
-use crate::udp_messages::CustomUDPSocket;
-
 use chrono;
 use std::sync::mpsc::{
     Sender,
     Receiver
 };
+use std::time::Duration;
+use crate::{
+    pod_data,
+    pod_states,
+    project_butterfree::udp::{
+        pod_state_message::PodStateMessage,
+        desktop_state_message::DesktopStateMessage,
+        errno::UdpErrno,
+        prelude::*
+    }
+};
+
 
 use super::super::worker_states::*;
 use super::super::messages::*;
@@ -42,13 +44,13 @@ impl UdpWorker<Connected> {
     fn send_pod_state_message(&self) {
         // Send Message Back to Desktop
         let pod_state_message = if self.current_telemetry_timestamp.timestamp() > self.last_received_telemetry_timestamp.timestamp() {
-            udp_messages::PodStateMessage::new(self.current_pod_state, self.next_pod_state, self.errno, &self.current_pod_data, self.current_telemetry_timestamp, false)
+            PodStateMessage::new(self.current_pod_state, self.next_pod_state, self.errno, &self.current_pod_data, self.current_telemetry_timestamp, false)
         } else {
-            udp_messages::PodStateMessage::new_no_telemetry(self.current_pod_state, self.next_pod_state, self.errno, self.current_telemetry_timestamp, false)
+            PodStateMessage::new_no_telemetry(self.current_pod_state, self.next_pod_state, self.errno, self.current_telemetry_timestamp, false)
         };
         match self.udp_socket.send_pod_state_message(&pod_state_message) {
             Ok(bytes_sent) => {
-                // println!("UDP THREAD: Send {} to Desktop", bytes_sent);
+                println!("UDP THREAD: Sent {} to Desktop", bytes_sent);
             },
             Err(error) => {
                 println!("Error Sending Message on UDP Thread: {:?}", error);
@@ -62,12 +64,12 @@ impl UdpWorker<Recovery> {
     fn send_pod_state_message(&self) {
         // Send Message Back to Desktop
         let pod_state_message = if self.current_telemetry_timestamp.timestamp() > self.last_received_telemetry_timestamp.timestamp() {
-            udp_messages::PodStateMessage::new(self.current_pod_state, self.next_pod_state, self.errno, &self.current_pod_data, self.current_telemetry_timestamp, true)
+            PodStateMessage::new(self.current_pod_state, self.next_pod_state, self.errno, &self.current_pod_data, self.current_telemetry_timestamp, true)
         } else {
-            udp_messages::PodStateMessage::new_no_telemetry(self.current_pod_state, self.next_pod_state, self.errno, self.current_telemetry_timestamp, true)
+            PodStateMessage::new_no_telemetry(self.current_pod_state, self.next_pod_state, self.errno, self.current_telemetry_timestamp, true)
         };
         match self.udp_socket.send_pod_state_message(&pod_state_message) {
-            Ok(bytes_sent) => {
+            Ok(_bytes_sent) => {
                 // println!("UDP THREAD: Send {} to Desktop", bytes_sent);
             },
             Err(error) => {
@@ -108,14 +110,19 @@ impl<State> UdpWorker<State> {
         self.next_pod_state = requested_state;
     }
 
-    pub fn new(
+    pub fn new<A: std::net::ToSocketAddrs+std::fmt::Debug>(
         can_sender: Sender<CanMessage>,
         tcp_sender: Sender<TcpMessage>,
         udp_receiver: Receiver<UDPMessage>,
         udp_max_number_timeouts: u32,
+        udp_socket_read_timeout: Duration,
+        udp_address: A
     ) -> UdpWorker<Startup> {
+        let udp_socket = UdpSocket::bind("0.0.0.0:8080").expect("Unable to Bind to UDP Socket on: 0.0.0.0:8080");
+        // let udp_socket = UdpSocket::bind(&udp_address).expect(&format!("Unable to Bind to UDP Socket on: {:?}", &udp_address));
+        udp_socket.set_read_timeout(Some(udp_socket_read_timeout)).expect("Failed to set read timeout on udp_socket");
         UdpWorker {
-            udp_socket: UdpSocket::bind("0.0.0.0:8080").expect("Unable to Bind to UDP Socket on port 8080"),
+            udp_socket,
             current_pod_state: pod_states::PodState::LowVoltage, // *************  TODO Figure out what the initial Value for this should be
             next_pod_state: pod_states::PodState::LowVoltage, // *************  TODO Figure out what the initial Value for this should be
             errno: UdpErrno::NoError,
@@ -141,12 +148,15 @@ impl<State> UdpWorker<State> {
      * PhantomData types cannot be assumed to have the same layout in memory. This is why we opt to use the C representation of  the struct. While it is not as
      * efficient in terms of storage, it will always give us a consistent layout in memory which is important for these operations to work properly
      */
+    #[allow(non_snake_case)]
     fn EnterRecovery(self) -> UdpWorker<Recovery> {
         unsafe { std::mem::transmute(self) }
     }
+    #[allow(non_snake_case)]
     fn EnterConnected(self) -> UdpWorker<Connected> {
         unsafe { std::mem::transmute(self) }
     }
+    #[allow(non_snake_case)]
     fn EnterDisconnected(self) -> UdpWorker<Disconnected> {
         unsafe { std::mem::transmute(self) }
     }
@@ -154,13 +164,15 @@ impl<State> UdpWorker<State> {
 pub type UdpWorkerState = WorkerState<UdpWorker<Startup>, UdpWorker<Recovery>, UdpWorker<Connected>, UdpWorker<Disconnected>>;
 
 impl UdpWorkerState {
-    pub fn new(
+    pub fn new<A: std::net::ToSocketAddrs+std::fmt::Debug>(
         can_sender: Sender<CanMessage>,
         tcp_sender: Sender<TcpMessage>,
         udp_receiver: Receiver<UDPMessage>,
         udp_max_number_timeouts: u32,
+        udp_socket_read_timeout: Duration,
+        udp_address: A,
     ) -> UdpWorkerState {
-        let worker: UdpWorker<Startup> = UdpWorker::<Startup>::new(can_sender, tcp_sender, udp_receiver, udp_max_number_timeouts);
+        let worker: UdpWorker<Startup> = UdpWorker::<Startup>::new(can_sender, tcp_sender, udp_receiver, udp_max_number_timeouts, udp_socket_read_timeout, udp_address);
         UdpWorkerState::Startup(worker)
     }
 }
@@ -182,12 +194,13 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Startup> {
 impl MainLoop<UdpWorkerState> for UdpWorker<Disconnected> {
     fn main_loop(self) -> UdpWorkerState {
         match self.get_udp_receiver_message_or_panic() {
-            UDPMessage::ConnectToHost(addr) => {
+            UDPMessage::ConnectToDesktop(addr) => {
                 if let Ok(_) = self.udp_socket.connect(addr) {
                     println!("UDP THREAD: Connected to addr: {:?}", addr);
                     return UdpWorkerState::Connected(self.EnterConnected());
                 } else {
                     println!("UDP THREAD: Unable to connect to {:?}", addr);
+                    self.tcp_sender.send(TcpMessage::UdpFailedToConnect).expect("To be able to message tcp thread");
                 }
             },
             message => {
@@ -201,6 +214,7 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Disconnected> {
 impl MainLoop<UdpWorkerState> for UdpWorker<Connected> {
     fn main_loop(mut self) -> UdpWorkerState {
         let mut socket_buffer = [0u8; 1024];
+        self.send_pod_state_message();
         match self.udp_socket.recv(&mut socket_buffer) {
             Ok(_bytes_received) => {
                 // When the POD Enters an Error State, we no longer need to follow the decision tree
@@ -209,7 +223,8 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Connected> {
                 // A failure was found and that the pod is working to shut down
                 // println!("UDP THREAD: {} Bytes Read", bytes_received);
                 if !self.current_pod_state.is_error_state() {
-                    if let Ok(desktop_state_message) = udp_messages::DesktopStateMessage::from_json_bytes(&socket_buffer) {
+                    if let Ok(desktop_state_message) = DesktopStateMessage::from_json_bytes(&socket_buffer) {
+                        println!("Desktop State_Message: {:?}", desktop_state_message.requested_state);
                         if desktop_state_message.requested_state == self.current_pod_state {
                             if self.next_pod_state == self.current_pod_state {
                                 self.handle_telemetry_timestamp(desktop_state_message.most_recent_timestamp);
@@ -241,9 +256,9 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Connected> {
                 }
             },
             Err(error) => {
-                println!("Error: {:?}", error); // TODO: Figure out what error is returned for a timeout so that case can be handled separately
                 match error.kind() {
-                    std::io::ErrorKind::TimedOut => {
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock  => {
+                        println!("Udp Socket Timed Out while reading");
                         self.timeout_counter += 1; // Move this to the timeout  portion of the error handler
                         if self.timeout_counter >= self.udp_max_number_timeouts {
                             // TODO Enter into Recovery. Assume Desktop Disconnected
@@ -253,7 +268,7 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Connected> {
                         }
                     },
                     _ => {
-
+                        println!("Error: {:?}", error);
                     }
                 }
 

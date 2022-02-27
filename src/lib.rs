@@ -5,16 +5,17 @@
  * support for unix primitives which are not available on windows and so the code needs to be compiled on the raspberry pi itself for full testing.
  */
 
-pub mod tcp_server;
+pub mod run_threads;
 #[cfg(unix)]
-pub mod roboteq;
-#[cfg(unix)]
-pub mod can;
+pub mod can_extentions;
 
-pub mod stream_utils;
-pub mod requests;
-pub mod udp_messages;
+mod utils;
+pub use utils::stream_utils;
+pub use utils::requests;
+pub mod project_butterfree;
 pub mod pod_states;
+pub mod board_states;
 pub mod pod_data;
-pub mod managers;
+pub mod thread_managers;
 pub mod error;
+pub mod config;
