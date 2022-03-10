@@ -5,7 +5,8 @@ use crate::pod_states::{ PodState };
  * boards. 
  */
 pub struct BoardStates {
-    bms_state: PodState
+    bms_state: PodState,
+    motor_controller_state: PodState,
 }
 
 pub enum Error {
@@ -18,7 +19,8 @@ impl BoardStates {
      */
     pub fn default() -> BoardStates {
         BoardStates {
-            bms_state: PodState::LowVoltage
+            bms_state: PodState::LowVoltage,
+            motor_controller_state: PodState::LowVoltage
         }
     }
     /**
@@ -29,10 +31,25 @@ impl BoardStates {
     }
 
     /**
+     * @brief get the value of the motor controller state
+     */
+    pub fn get_motor_controller_state(&self) -> &PodState {
+        return &self.motor_controller_state;
+    }
+
+
+    /**
      * @brief Set the value of the bms state
      */
     pub fn set_bms_state(&mut self, new_state: &PodState) {
         self.bms_state = *new_state;
+    }
+
+    /**
+     * @brief Set the value of the motor controller state
+     */
+    pub fn set_motor_controller_state(&mut self, new_state: &PodState) {
+        self.motor_controller_state = *new_state;
     }
 
     /**
@@ -45,6 +62,22 @@ impl BoardStates {
     {
         if self.get_bms_state().can_transition_to(&new_state) {
             self.set_bms_state(new_state);
+            Ok(())
+        } else {
+            Err(Error::InvalidTransision)
+        }
+    }
+
+    /**
+     * @brief wrapper for setting the motor controller state which checks if the transistion
+     * is valid and throws and error if it is not
+     * @param new_state the value to set motor controller state to.
+     */
+    pub fn set_motor_controller_state_transition_checked(&mut self, new_state: &PodState) 
+    -> Result<(), Error>
+    {
+        if self.get_motor_controller_state().can_transition_to(&new_state) {
+            self.set_motor_controller_state(new_state);
             Ok(())
         } else {
             Err(Error::InvalidTransision)

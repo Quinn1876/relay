@@ -2,6 +2,8 @@ mod can_frame;
 mod can_socket;
 mod can_command;
 mod error;
+pub mod fault_reports;
+pub mod ack_nack;
 use error::CanError as Error;
 
 //* Helper function for opening a can socket

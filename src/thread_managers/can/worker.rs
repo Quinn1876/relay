@@ -6,6 +6,7 @@ use std::sync::mpsc::{ Receiver, Sender };
 use std::time::Duration;
 use socketcan::ShouldRetry;
 use crate::can_extentions::prelude::*;
+use crate::can_extentions::ack_nack::AckNack;
 
 
 #[repr(C)] //* Required for type transmutations
@@ -16,6 +17,7 @@ pub struct CanWorker<State = Startup> {
     worker_sender: Sender<WorkerMessage>,
     can_receiver: Receiver<CanMessage>,
     requested_pod_state: crate::pod_states::PodState,
+    current_pod_state: crate::pod_states::PodState,
     board_state: BoardStates,
     state: std::marker::PhantomData<State>
 }
@@ -41,6 +43,7 @@ impl CanWorker {
             worker_sender: initializer.worker_message_sender,
             can_receiver: initializer.can_message_receiver,
             requested_pod_state: crate::pod_states::PodState::LowVoltage,
+            current_pod_state: crate::pod_states::PodState::LowVoltage,
             board_state: BoardStates::default(),
             state: std::marker::PhantomData
         }
@@ -87,14 +90,42 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
     } else if let Ok(frame) = response {
         // Frame Received
         // Check for state messages before passing the frame on to the worker
-        if let CanCommand::BmsStateChange(new_state) = frame.get_command() {
-            self.board_state.set_bms_state(&new_state);
-            self.udp_sender.send(UDPMessage::PodStateChanged(new_state)).expect("To Be able to send message to udp from can");
+        match frame.get_command() {
+            CanCommand::BmsStateChange(ack_nack) => {
+                // println!("BMS STATE CHANGE ACC, {:?}", self.requested_pod_state);
+                match ack_nack {
+                    AckNack::Ack => {
+                        self.board_state.set_bms_state(&self.requested_pod_state);
+                    }
+                    _ => panic!("Received A NACK FROM BMS State Change. Don't know what to do!")
+                }
+            },
+            CanCommand::MotorControllerStateChange(ack_nack) => {
+                // println!("MC STATE CHANGE ACC, {:?}", self.requested_pod_state);
+                match ack_nack {
+                    AckNack::Ack => {
+                        self.board_state.set_motor_controller_state(&self.requested_pod_state);
+                    }
+                    _ => panic!("Received A NACK FROM MotorController State Change. Don't know what to do!")
+                }
+            },
+            _ => {}
         }
         self.worker_sender.send(WorkerMessage::CanFrameAndTimeStamp(frame, chrono::Utc::now().naive_local())).expect("Unable to send message from CAN Thread on Worker Channel");
     } else {
         // ERROR Reading from Can socket
         println!("Error Reading from CAN Socket");
+    }
+
+    // Check for Transition Complete
+    if *self.board_state.get_bms_state() == self.requested_pod_state 
+    && *self.board_state.get_motor_controller_state() == self.requested_pod_state
+    && self.requested_pod_state != self.current_pod_state {
+        println!("Sending Ack to UDP for state change");
+        self.current_pod_state = self.requested_pod_state;
+        self.udp_sender.send(UDPMessage::PodStateChangeAck).expect("unable to message UDP thread");
+    } else {
+        println!("CURRENT {:?}, BMS: {:?}, MC: {:?}, REQUESTED: {:?}", self.current_pod_state, self.board_state.get_bms_state(), self.board_state.get_motor_controller_state(), self.requested_pod_state);
     }
 
     // check for state message from udp
@@ -106,13 +137,7 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
         }
     }
 
-    let message_result;
-    if self.requested_pod_state == *self.board_state.get_bms_state() 
-    && self.requested_pod_state == crate::pod_states::PodState::AutoPilot {
-        message_result = self.can_handle.set_motor_throttle(1, 1, 100); // TODO move this into config
-    } else {
-        message_result = self.can_handle.send_pod_state(&self.requested_pod_state);
-    }
+    let message_result = self.can_handle.send_pod_state(&self.requested_pod_state);
 
     match message_result {
         Ok(()) => {},
@@ -120,6 +145,6 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
             println!("Error Sending Message on CAN bus: {:?}",  err);
         }
     }
-   CanWorkerState::Disconnected(self)
+    CanWorkerState::Disconnected(self)
  }
 }

@@ -13,14 +13,13 @@ pub enum TcpMessage {
     UdpFailedToConnect,
 }
 
-
 #[derive(Debug)]
 pub enum UDPMessage {
     ConnectToDesktop(SocketAddr),
     DisconnectFromHost,
     StartupComplete,
     #[allow(dead_code)] // Not Dead, only constructed when running in unix, but the udp socket needs to be able to check it in all cases
-    PodStateChanged(pod_states::PodState),
+    PodStateChangeAck,
     #[allow(dead_code)]
     TelemetryDataAvailable(pod_data::PodData, chrono::NaiveDateTime)
 }

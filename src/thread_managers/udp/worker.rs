@@ -50,7 +50,7 @@ impl UdpWorker<Connected> {
         };
         match self.udp_socket.send_pod_state_message(&pod_state_message) {
             Ok(bytes_sent) => {
-                println!("UDP THREAD: Sent {} to Desktop", bytes_sent);
+                // println!("UDP THREAD: Sent {} to Desktop", bytes_sent);
             },
             Err(error) => {
                 println!("Error Sending Message on UDP Thread: {:?}", error);
@@ -203,6 +203,7 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Disconnected> {
                     self.tcp_sender.send(TcpMessage::UdpFailedToConnect).expect("To be able to message tcp thread");
                 }
             },
+            UDPMessage::TelemetryDataAvailable(data, time) => {},
             message => {
                 println!("UDP THREAD: Received Message on UDP mpsc channel while Disconnected: {:?}", message);
             }
@@ -213,6 +214,26 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Disconnected> {
 
 impl MainLoop<UdpWorkerState> for UdpWorker<Connected> {
     fn main_loop(mut self) -> UdpWorkerState {
+        // Check for new Messages from other threads
+        if let Ok(message) = self.udp_message_receiver.try_recv() {
+            match message {
+                UDPMessage::PodStateChangeAck => {
+                    self.current_pod_state = self.next_pod_state;
+                },
+                UDPMessage::TelemetryDataAvailable(new_data, timestamp) => {
+                    // println!("UDP Data Received: {}", timestamp);
+                    self.current_pod_data = new_data;
+                    self.current_telemetry_timestamp = timestamp;
+                },
+                UDPMessage::DisconnectFromHost => {
+                    self.send_pod_state_message();
+                    return UdpWorkerState::Recovery(self.EnterRecovery());
+                }
+                unrecognized_message => {
+                    panic!("UnExpected Message Received on UDP mpsc channel while in Connected State: {:?}", unrecognized_message);
+                }
+            }
+        }
         let mut socket_buffer = [0u8; 1024];
         self.send_pod_state_message();
         match self.udp_socket.recv(&mut socket_buffer) {
@@ -224,26 +245,38 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Connected> {
                 // println!("UDP THREAD: {} Bytes Read", bytes_received);
                 if !self.current_pod_state.is_error_state() {
                     if let Ok(desktop_state_message) = DesktopStateMessage::from_json_bytes(&socket_buffer) {
-                        println!("Desktop State_Message: {:?}", desktop_state_message.requested_state);
+                        // println!("Desktop State_Message: {:?}", desktop_state_message.requested_state);
                         if desktop_state_message.requested_state == self.current_pod_state {
                             if self.next_pod_state == self.current_pod_state {
+                                // println!("Case 1");
                                 self.handle_telemetry_timestamp(desktop_state_message.most_recent_timestamp);
                             } else {
+                                // println!("Case 2");
+                                // println!("Current State: {:?}", self.current_pod_state);
+                                // println!("NEXT State: {:?}", self.next_pod_state);
+                                // println!("requested State: {:?}", desktop_state_message.requested_state);
                                 return UdpWorkerState::Recovery(self.invalid_transition_recognized());
                             }
                         } else {
                             if self.current_pod_state.can_transition_to(&desktop_state_message.requested_state) {
                                 if desktop_state_message.requested_state == self.next_pod_state {
+                                    // println!("Case 3");
                                     self.handle_telemetry_timestamp(desktop_state_message.most_recent_timestamp);
                                 } else {
                                     if self.current_pod_state == self.next_pod_state {
+                                        println!("Case 4");
+                                        println!("Current State: {:?}", self.current_pod_state);
+                                        println!("NEXT State: {:?}", self.next_pod_state);
+                                        println!("requested State: {:?}", desktop_state_message.requested_state);
                                         self.trigger_transition_to_new_state(desktop_state_message.requested_state);
                                         self.handle_telemetry_timestamp(desktop_state_message.most_recent_timestamp);
                                     } else {
+                                        println!("Case 5");
                                         return UdpWorkerState::Recovery(self.invalid_transition_recognized());
                                     }
                                 }
                             } else {
+                                println!("Case 6");
                                 return UdpWorkerState::Recovery(self.invalid_transition_recognized());
                             }
                         }
@@ -274,28 +307,7 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Connected> {
 
             }
         }
-        // Check for new Messages from other threads
-        while let Ok(message) = self.udp_message_receiver.try_recv() {
-            match message {
-                UDPMessage::PodStateChanged(new_state) => {
-                    if new_state.is_error_state() {
-                        self.errno = UdpErrno::GeneralPodFailure;
-                    }
-                    self.current_pod_state = new_state;
-                },
-                UDPMessage::TelemetryDataAvailable(new_data, timestamp) => {
-                    self.current_pod_data = new_data;
-                    self.current_telemetry_timestamp = timestamp;
-                },
-                UDPMessage::DisconnectFromHost => {
-                    self.send_pod_state_message();
-                    return UdpWorkerState::Recovery(self.EnterRecovery());
-                }
-                unrecognized_message => {
-                    panic!("UnExpected Message Received on UDP mpsc channel while in Connected State: {:?}", unrecognized_message);
-                }
-            }
-        }
+
         return UdpWorkerState::Connected(self);
     }
 }
@@ -305,11 +317,11 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Recovery> {
         self.send_pod_state_message();
         while let Ok(message) = self.udp_message_receiver.try_recv() {
             match message {
-                UDPMessage::PodStateChanged(new_state) => {
-                    if new_state.is_error_state() {
+                UDPMessage::PodStateChangeAck => {
+                    self.current_pod_state = self.next_pod_state;
+                    if self.current_pod_state.is_error_state() {
                         self.errno = UdpErrno::GeneralPodFailure;
                     }
-                    self.current_pod_state = new_state;
                 },
                 UDPMessage::TelemetryDataAvailable(new_data, timestamp) => {
                     self.current_pod_data = new_data;

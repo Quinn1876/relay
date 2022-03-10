@@ -21,11 +21,15 @@ pub struct PodStateMessage {
 
 impl PodStateMessage {
     pub fn to_json_bytes(&self) -> Vec<u8> {
+        let telemetry: json::JsonValue = match self.telemetry {
+            Some(data) => data.into(),
+            _ => json::JsonValue::Null
+        };
         let json_data = object!{
             current_state: self.current_state.to_byte(),
             pending_next_state: self.pending_next_state.to_byte(),
             errno: self.errno.to_byte(),
-            telemetry: if let Some(telemetry) = self.telemetry.as_ref() { telemetry.to_json() } else { json::JsonValue::Null },
+            telemetry: telemetry,
             telemetry_timestamp: self.telemetry_timestamp.timestamp(),
             recovering: self.recovering
         };
@@ -38,7 +42,7 @@ impl PodStateMessage {
             errno,
             pending_next_state,
             recovering,
-            telemetry: Some(*telemetry).clone(),
+            telemetry: Some((*telemetry).clone()),
             telemetry_timestamp,
         }
     }
