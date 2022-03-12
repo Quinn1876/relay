@@ -18,7 +18,7 @@ mod test {
     }
 
     #[test]
-    fn getSetSibling() {
+    fn get_set_sibling() {
         let mut node: RequestParserNode::<String> = RequestParserNode::new(b'a');
         node.create_sibling(b'b');
         let node = node;
@@ -30,7 +30,7 @@ mod test {
     }
 
     #[test]
-    fn getSetChild() {
+    fn get_set_child() {
         let mut node: RequestParserNode::<String> = RequestParserNode::new(b'a');
         node.create_child(b'c');
         let node = node;
@@ -41,7 +41,7 @@ mod test {
         }
     }
     #[test]
-    fn getInsertOne() {
+    fn get_insert_one() {
         let mut parser: RequestParser<String> = RequestParser::new();
         parser.insert("HELLO", String::from("World")).validate_result(Success(()));
         let result = match parser.get("HELLO") {
@@ -52,7 +52,7 @@ mod test {
     }
 
     #[test]
-    fn insertSingleLengthKey() {
+    fn insert_single_length_key() {
         let mut parser: RequestParser<String> = RequestParser::new();
         parser.insert("1", String::from("Successful insert")).validate_result(Success(()));
         let result = match parser.get("1") {
@@ -64,7 +64,7 @@ mod test {
     }
 
     #[test]
-    fn insertMultipleKeys() {
+    fn insert_multiple_keys() {
         let mut parser: RequestParser<String> = RequestParser::new();
         parser.insert("1", String::from("Successful insert")).validate_result(Success(()));
         parser.insert("12", String::from("Successful insert")).validate_result(Success(()));
@@ -133,7 +133,7 @@ mod test {
     }
 
     #[test]
-    fn overwriteInsert() {
+    fn overwrite_insert() {
         let mut parser: RequestParser::<u32> = RequestParser::new();
 
         parser.insert("HELLO", 256).validate_result(Success(()));
@@ -156,7 +156,7 @@ mod test {
     }
 
     #[test]
-    fn stripLine() {
+    fn strip_line() {
         let mut parser: RequestParser::<u32> = RequestParser::new();
         parser.insert("LINE1\r\n", 7);
         let parser = parser;

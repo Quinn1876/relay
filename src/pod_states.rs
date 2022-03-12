@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 #[derive(PartialEq, Hash, Eq, Debug, Copy, Clone)]
-pub enum PodStates {
+pub enum PodState {
     LowVoltage,
     Armed,
     AutoPilot,
@@ -19,40 +19,40 @@ pub enum PodStates {
 
 mod test {
     #[allow(unused_imports)]
-    use super::{ PodStates, HashMap };
+    use super::{ PodState, HashMap };
     #[test]
     fn test_states() {
         for i in 0u8..0x0Bu8 {
-            assert_eq!(PodStates::from_byte(i).to_byte(), i);
+            assert_eq!(PodState::from_byte(i).to_byte(), i);
         }
     }
 
     #[test]
     fn test_transitions() {
         let all_states = vec![
-            PodStates::Resting,
-            PodStates::LowVoltage,
-            PodStates::Armed,
-            PodStates::AutoPilot,
-            PodStates::Braking,
-            PodStates::EmergencyBrake,
-            PodStates::SystemFailure,
-            PodStates::ManualOperationWaiting,
-            PodStates::Accelerating,
-            PodStates::AtSpeed,
-            PodStates::Decelerating,
-            PodStates::Invalid
+            PodState::Resting,
+            PodState::LowVoltage,
+            PodState::Armed,
+            PodState::AutoPilot,
+            PodState::Braking,
+            PodState::EmergencyBrake,
+            PodState::SystemFailure,
+            PodState::ManualOperationWaiting,
+            PodState::Accelerating,
+            PodState::AtSpeed,
+            PodState::Decelerating,
+            PodState::Invalid
         ];
 
-        let mut valid_transitions: HashMap<PodStates, Vec<PodStates>> = HashMap::new();
+        let mut valid_transitions: HashMap<PodState, Vec<PodState>> = HashMap::new();
 
-        valid_transitions.insert(PodStates::Resting, vec![PodStates::LowVoltage]);
-        valid_transitions.insert(PodStates::LowVoltage, vec![PodStates::Resting, PodStates::Armed]);
-        valid_transitions.insert(PodStates::Armed, vec![PodStates::LowVoltage, PodStates::AutoPilot, PodStates::EmergencyBrake]);
-        valid_transitions.insert(PodStates::AutoPilot, vec![PodStates::Braking, PodStates::EmergencyBrake]);
-        valid_transitions.insert(PodStates::Braking, vec![PodStates::LowVoltage]);
-        valid_transitions.insert(PodStates::EmergencyBrake, vec![PodStates::SystemFailure]);
-        valid_transitions.insert(PodStates::SystemFailure, vec![]);
+        valid_transitions.insert(PodState::Resting, vec![PodState::LowVoltage]);
+        valid_transitions.insert(PodState::LowVoltage, vec![PodState::Resting, PodState::Armed]);
+        valid_transitions.insert(PodState::Armed, vec![PodState::LowVoltage, PodState::AutoPilot, PodState::EmergencyBrake]);
+        valid_transitions.insert(PodState::AutoPilot, vec![PodState::Braking, PodState::EmergencyBrake]);
+        valid_transitions.insert(PodState::Braking, vec![PodState::LowVoltage]);
+        valid_transitions.insert(PodState::EmergencyBrake, vec![PodState::SystemFailure]);
+        valid_transitions.insert(PodState::SystemFailure, vec![]);
 
         for state in all_states {
             let transitions = valid_transitions.get(&state);
@@ -70,59 +70,75 @@ mod test {
  * This Section should be kept in line with the definition in the CAN Communication Protocol Document
  * source: https://docs.google.com/spreadsheets/d/18rGH__yyJPf3jil74yTlVyFFqCOyuNzP3DCFmmIWWbo/edit?usp=drive_web&ouid=109880063725320746438
  */
-impl PodStates {
+impl PodState {
     pub fn to_byte(&self) -> u8 {
         match self {
-            PodStates::Resting                  => 0x00,
-            PodStates::LowVoltage               => 0x01,
-            PodStates::Armed                    => 0x02,
-            PodStates::AutoPilot                => 0x03,
-            PodStates::Braking                  => 0x04,
-            PodStates::EmergencyBrake           => 0x05,
-            PodStates::SystemFailure            => 0x06,
-            PodStates::ManualOperationWaiting   => 0x07,
-            PodStates::Accelerating             => 0x08,
-            PodStates::AtSpeed                  => 0x09,
-            PodStates::Decelerating             => 0x0A,
-            PodStates::Invalid                  => 0x0B
+            PodState::Resting                  => 0x00,
+            PodState::LowVoltage               => 0x01,
+            PodState::Armed                    => 0x02,
+            PodState::AutoPilot                => 0x03,
+            PodState::Braking                  => 0x04,
+            PodState::EmergencyBrake           => 0x05,
+            PodState::SystemFailure            => 0x06,
+            PodState::ManualOperationWaiting   => 0x07,
+            PodState::Accelerating             => 0x08,
+            PodState::AtSpeed                  => 0x09,
+            PodState::Decelerating             => 0x0A,
+            PodState::Invalid                  => 0x0B
         }
     }
 
     pub fn from_byte(byte: u8) -> Self {
         match byte {
-            0x00 => PodStates::Resting,
-            0x01 => PodStates::LowVoltage,
-            0x02 => PodStates::Armed,
-            0x03 => PodStates::AutoPilot,
-            0x04 => PodStates::Braking,
-            0x05 => PodStates::EmergencyBrake,
-            0x06 => PodStates::SystemFailure,
-            0x07 => PodStates::ManualOperationWaiting,
-            0x08 => PodStates::Accelerating,
-            0x09 => PodStates::AtSpeed,
-            0x0A => PodStates::Decelerating,
-            _ => PodStates::Invalid
+            0x00 => PodState::Resting,
+            0x01 => PodState::LowVoltage,
+            0x02 => PodState::Armed,
+            0x03 => PodState::AutoPilot,
+            0x04 => PodState::Braking,
+            0x05 => PodState::EmergencyBrake,
+            0x06 => PodState::SystemFailure,
+            0x07 => PodState::ManualOperationWaiting,
+            0x08 => PodState::Accelerating,
+            0x09 => PodState::AtSpeed,
+            0x0A => PodState::Decelerating,
+            _ => PodState::Invalid
         }
     }
 
-    pub fn can_transition_to(&self, new_state: &PodStates) -> bool {
+    /**
+     * @brief validates state transitions
+     */
+    pub fn can_transition_to(&self, new_state: &PodState) -> bool {
         match self {
-            PodStates::Resting => matches!(new_state, PodStates::LowVoltage),
-            PodStates::LowVoltage =>  matches!(new_state, PodStates::Resting | PodStates::Armed),
-            PodStates::Armed => matches!(new_state, PodStates::LowVoltage | PodStates::AutoPilot | PodStates::EmergencyBrake),
-            PodStates::AutoPilot => matches!(new_state, PodStates::Braking | PodStates::EmergencyBrake),
-            PodStates::Braking => matches!(new_state, PodStates::LowVoltage),
-            PodStates::EmergencyBrake => matches!(new_state, PodStates::SystemFailure),
-            PodStates::SystemFailure => false,
-            PodStates::ManualOperationWaiting => false, // TODO Implement manual controls
-            PodStates::Accelerating => false,
-            PodStates::AtSpeed => false,
-            PodStates::Decelerating => false,
-            PodStates::Invalid => false
+            PodState::Resting => matches!(new_state, PodState::LowVoltage),
+            PodState::LowVoltage =>  matches!(new_state, PodState::Resting | PodState::Armed),
+            PodState::Armed => matches!(new_state, PodState::LowVoltage | PodState::AutoPilot | PodState::EmergencyBrake),
+            PodState::AutoPilot => matches!(new_state, PodState::Braking | PodState::EmergencyBrake),
+            PodState::Braking => matches!(new_state, PodState::LowVoltage),
+            PodState::EmergencyBrake => matches!(new_state, PodState::SystemFailure),
+            PodState::SystemFailure => false,
+            PodState::ManualOperationWaiting => false, // TODO Implement manual controls
+            PodState::Accelerating => false,
+            PodState::AtSpeed => false,
+            PodState::Decelerating => false,
+            PodState::Invalid => false
         }
     }
 
     pub fn is_error_state(&self) -> bool {
-        matches!(self, PodStates::EmergencyBrake | PodStates::SystemFailure)
+        matches!(self, PodState::EmergencyBrake | PodState::SystemFailure)
     }
 }
+
+impl From<u8> for PodState {
+    fn from(byte: u8) -> PodState {
+        return PodState::from_byte(byte);
+    }
+}
+
+impl Into<u8> for &PodState {
+    fn into(self) -> u8 {
+        return self.to_byte();
+    }
+}
+
