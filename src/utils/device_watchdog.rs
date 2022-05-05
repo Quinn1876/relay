@@ -183,4 +183,20 @@ mod test {
     assert!(receiver.try_recv().is_err()); /* There should not be a notification here */
   }
 
+  #[test]
+  fn check_devices_1() {
+    /* Setup */
+    let (sender, receiver) = std::sync::mpsc::channel::<u8>();
+    let mut device_watchdog_map_dut = DeviceWatchdogMap::with_all_devices(sender, 1, 200);
+    device_watchdog_map_dut.update_device_timestamp(Device::BMS, get_now());
+    device_watchdog_map_dut.update_device_timestamp(Device::ELEKID, get_now());
+    std::thread::sleep(std::time::Duration::from_millis(401)); /* Sleep just past hte 2x period time */
+    assert!(receiver.try_recv().is_err()); /* There should not be a notification here */
+    assert_eq!(device_watchdog_map_dut.check_devices().len(), 2);
+    assert!(receiver.try_recv().is_ok()); /* There should  be a notification here */
+    assert!(receiver.try_recv().is_ok()); /* There should  be a notification here */
+    assert!(receiver.try_recv().is_err()); /* There should not be a notification here */
+
+  }
+
 }
