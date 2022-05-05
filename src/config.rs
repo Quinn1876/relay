@@ -10,7 +10,7 @@ mod test {
     use std::net::{SocketAddr, IpAddr, Ipv4Addr};
     #[test]
     fn config_from_args_address() {
-        let args = vec!["test program", "-a", "100.20.20.10:9090"];
+        let args = vec!["test program", "-ta", "100.20.20.10:9090"];
         let args: Vec<String> = args.iter().map(|&arg| String::from(arg)).collect();
         let config_dut = Config::from_args(&args);
         let expected_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(100, 20, 20, 10)), 9090);
@@ -31,7 +31,7 @@ mod test {
 
     #[test]
     fn config_from_args_buffer_size_and_address() {
-        let args = vec!["test program", "-b", "1024", "-a", "250.230.210.120:1000"];
+        let args = vec!["test program", "-b", "1024", "-ta", "250.230.210.120:1000"];
         let args: Vec<String> = args.iter().map(|arg| String::from(*arg)).collect();
 
         let config_dut = Config::from_args(&args);
