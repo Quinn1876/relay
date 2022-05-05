@@ -30,7 +30,6 @@ pub struct CanWorkerInitializer {
     pub can_socket_read_timeout: Duration
 }
 
-// TODO This file is WIP
 impl CanWorker {
     pub fn new(
         initializer: CanWorkerInitializer
@@ -118,7 +117,7 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
     }
 
     // Check for Transition Complete
-    if *self.board_state.get_bms_state() == self.requested_pod_state 
+    if *self.board_state.get_bms_state() == self.requested_pod_state
     && *self.board_state.get_motor_controller_state() == self.requested_pod_state
     && self.requested_pod_state != self.current_pod_state {
         println!("Sending Ack to UDP for state change");
