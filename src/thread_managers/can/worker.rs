@@ -127,11 +127,14 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
         println!("CURRENT {:?}, BMS: {:?}, MC: {:?}, REQUESTED: {:?}", self.current_pod_state, self.board_state.get_bms_state(), self.board_state.get_motor_controller_state(), self.requested_pod_state);
     }
 
-    // check for state message from udp
+    // check for state message from udp or timeout from worker
     if let Ok(message) = self.can_receiver.try_recv() {
         match message {
             CanMessage::ChangeState(new_state) => {
                 self.requested_pod_state = new_state;
+            }
+            CanMessage::DeviceLost => {
+                todo!()
             }
         }
     }

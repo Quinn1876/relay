@@ -15,7 +15,7 @@ use std::time::{
 };
 use chrono::NaiveDateTime;
 
-#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 pub enum Device {
   BMS,
   MC,
@@ -27,7 +27,8 @@ pub enum Device {
   TORCHIC_2
 }
 
-fn get_now() -> NaiveDateTime {
+/* TODO: This might make more sense in a date time utils module, but for now this is the only relevant file that its needed in */
+pub fn get_now() -> NaiveDateTime {
   let now = SystemTime::now()
     .duration_since(UNIX_EPOCH)
     .unwrap();
@@ -83,7 +84,7 @@ impl<T: Clone + Send> DeviceWatchdog<T> {
 
 pub type DeviceWatchdogMap<T> = std::collections::HashMap<Device, DeviceWatchdog<T>>;
 
-trait DeviceWatchdogMapFuncs {
+pub trait DeviceWatchdogMapFuncs {
   type Notification: Clone + Send;
 
   /* Create a map with all devices */

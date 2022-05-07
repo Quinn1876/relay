@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use socketcan::CANFrame;
 use crate::{
     pod_data,
-    pod_states
+    pod_states,
 };
 
 pub enum TcpMessage {
@@ -24,8 +24,10 @@ pub enum UDPMessage {
     TelemetryDataAvailable(pod_data::PodData, chrono::NaiveDateTime)
 }
 
+#[derive(Clone)]
 pub enum CanMessage {
-    ChangeState(pod_states::PodState)
+    ChangeState(pod_states::PodState),
+    DeviceLost
 }
 
 pub enum WorkerMessage {
