@@ -9,7 +9,9 @@ use std::sync::mpsc::{
 use std::time::Duration;
 use crate::{
     pod_data,
-    pod_states,
+    pod_states::{
+        PodState
+    },
     project_butterfree::udp::{
         pod_state_message::PodStateMessage,
         desktop_state_message::DesktopStateMessage,
@@ -26,8 +28,8 @@ use super::super::main_loop::*;
 #[repr(C)] // Required for type transmutations
 pub struct UdpWorker<State = Startup> {
     udp_socket: UdpSocket,
-    current_pod_state: pod_states::PodState,
-    next_pod_state: pod_states::PodState,
+    current_pod_state: PodState,
+    next_pod_state: PodState,
     errno: UdpErrno,
     timeout_counter: u32,
     last_received_telemetry_timestamp: chrono::NaiveDateTime,
@@ -105,7 +107,7 @@ impl<State> UdpWorker<State> {
         self.last_received_telemetry_timestamp = timestamp;
     }
 
-    fn trigger_transition_to_new_state(&mut self, requested_state: pod_states::PodState) {
+    fn trigger_transition_to_new_state(&mut self, requested_state: PodState) {
         self.can_message_sender.send(CanMessage::ChangeState(requested_state.clone())).expect("Should be able to Send a message to the Can thread from the UDP thread");
         self.next_pod_state = requested_state;
     }
@@ -123,8 +125,8 @@ impl<State> UdpWorker<State> {
         udp_socket.set_read_timeout(Some(udp_socket_read_timeout)).expect("Failed to set read timeout on udp_socket");
         UdpWorker {
             udp_socket,
-            current_pod_state: pod_states::PodState::LowVoltage, // *************  TODO Figure out what the initial Value for this should be
-            next_pod_state: pod_states::PodState::LowVoltage, // *************  TODO Figure out what the initial Value for this should be
+            current_pod_state: PodState::LowVoltage, // *************  TODO Figure out what the initial Value for this should be
+            next_pod_state: PodState::LowVoltage, // *************  TODO Figure out what the initial Value for this should be
             errno: UdpErrno::NoError,
             timeout_counter: 0,
             last_received_telemetry_timestamp: chrono::Utc::now().naive_local(),
@@ -192,7 +194,7 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Startup> {
 }
 
 impl MainLoop<UdpWorkerState> for UdpWorker<Disconnected> {
-    fn main_loop(self) -> UdpWorkerState {
+    fn main_loop(mut self) -> UdpWorkerState {
         match self.get_udp_receiver_message_or_panic() {
             UDPMessage::ConnectToDesktop(addr) => {
                 if let Ok(_) = self.udp_socket.connect(addr) {
@@ -203,7 +205,10 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Disconnected> {
                     self.tcp_sender.send(TcpMessage::UdpFailedToConnect).expect("To be able to message tcp thread");
                 }
             },
-            UDPMessage::TelemetryDataAvailable(data, time) => {},
+            UDPMessage::TelemetryDataAvailable(_data, _time) => {},
+            UDPMessage::SystemFault => {
+                self.current_pod_state = PodState::SystemFailure;
+            }
             message => {
                 println!("UDP THREAD: Received Message on UDP mpsc channel while Disconnected: {:?}", message);
             }
@@ -228,6 +233,9 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Connected> {
                 UDPMessage::DisconnectFromHost => {
                     self.send_pod_state_message();
                     return UdpWorkerState::Recovery(self.EnterRecovery());
+                },
+                UDPMessage::SystemFault => {
+                    self.current_pod_state = PodState::SystemFailure;
                 }
                 unrecognized_message => {
                     panic!("UnExpected Message Received on UDP mpsc channel while in Connected State: {:?}", unrecognized_message);
@@ -328,6 +336,9 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Recovery> {
                     self.current_telemetry_timestamp = timestamp;
                 },
                 UDPMessage::DisconnectFromHost => {
+                },
+                UDPMessage::SystemFault => {
+                    self.current_pod_state = PodState::SystemFailure;
                 }
                 unrecognized_message => {
                     panic!("UnExpected Message Received on UDP mpsc channel while in Connected State: {:?}", unrecognized_message);
@@ -335,26 +346,26 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Recovery> {
             }
         }
         match self.current_pod_state {
-            pod_states::PodState::LowVoltage => {
+            PodState::LowVoltage => {
                 self.tcp_sender.send(TcpMessage::RecoveryComplete).expect("To be able to send message");
                 return UdpWorkerState::Disconnected(self.EnterDisconnected());
             },
-            pod_states::PodState::Armed => {
+            PodState::Armed => {
                 // transision to lowVoltage
-                if self.next_pod_state != pod_states::PodState::LowVoltage {
-                    self.trigger_transition_to_new_state(pod_states::PodState::LowVoltage);
+                if self.next_pod_state != PodState::LowVoltage {
+                    self.trigger_transition_to_new_state(PodState::LowVoltage);
                 }
             },
-            pod_states::PodState::AutoPilot => {
+            PodState::AutoPilot => {
                 //transition to braking
-                if self.next_pod_state != pod_states::PodState::Braking {
-                    self.trigger_transition_to_new_state(pod_states::PodState::Braking);
+                if self.next_pod_state != PodState::Braking {
+                    self.trigger_transition_to_new_state(PodState::Braking);
                 }
             },
-            pod_states::PodState::Braking => {
+            PodState::Braking => {
                 // wait till regression to lv
-                if self.next_pod_state != pod_states::PodState::LowVoltage {
-                    self.trigger_transition_to_new_state(pod_states::PodState::LowVoltage)
+                if self.next_pod_state != PodState::LowVoltage {
+                    self.trigger_transition_to_new_state(PodState::LowVoltage)
                 }
             },
             state => {

@@ -21,7 +21,8 @@ pub enum UDPMessage {
     #[allow(dead_code)] // Not Dead, only constructed when running in unix, but the udp socket needs to be able to check it in all cases
     PodStateChangeAck,
     #[allow(dead_code)]
-    TelemetryDataAvailable(pod_data::PodData, chrono::NaiveDateTime)
+    TelemetryDataAvailable(pod_data::PodData, chrono::NaiveDateTime),
+    SystemFault
 }
 
 #[derive(Clone)]

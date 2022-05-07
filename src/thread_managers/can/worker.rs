@@ -2,6 +2,7 @@ use super::super::worker_states::*;
 use super::super::messages::*;
 use super::super::main_loop::*;
 use crate::board_states::{BoardStates};
+use crate::pod_states::PodState;
 use std::sync::mpsc::{ Receiver, Sender };
 use std::time::Duration;
 use socketcan::ShouldRetry;
@@ -16,8 +17,8 @@ pub struct CanWorker<State = Startup> {
     udp_sender: Sender<UDPMessage>,
     worker_sender: Sender<WorkerMessage>,
     can_receiver: Receiver<CanMessage>,
-    requested_pod_state: crate::pod_states::PodState,
-    current_pod_state: crate::pod_states::PodState,
+    requested_pod_state: PodState,
+    current_pod_state: PodState,
     board_state: BoardStates,
     state: std::marker::PhantomData<State>
 }
@@ -41,8 +42,8 @@ impl CanWorker {
             udp_sender: initializer.udp_message_sender,
             worker_sender: initializer.worker_message_sender,
             can_receiver: initializer.can_message_receiver,
-            requested_pod_state: crate::pod_states::PodState::LowVoltage,
-            current_pod_state: crate::pod_states::PodState::LowVoltage,
+            requested_pod_state: PodState::LowVoltage,
+            current_pod_state: PodState::LowVoltage,
             board_state: BoardStates::default(),
             state: std::marker::PhantomData
         }
@@ -131,10 +132,14 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
     if let Ok(message) = self.can_receiver.try_recv() {
         match message {
             CanMessage::ChangeState(new_state) => {
-                self.requested_pod_state = new_state;
+                /* This check is just for safety. Since we deal with multiple workers, there could be race conditions. If DeviceLost is received, that needs to be the final state. */
+                if self.requested_pod_state != PodState::SystemFailure {
+                    self.requested_pod_state = new_state;
+                }
             }
             CanMessage::DeviceLost => {
-                todo!()
+                self.requested_pod_state = PodState::SystemFailure;
+                self.udp_sender.send(UDPMessage::SystemFault).unwrap();
             }
         }
     }
