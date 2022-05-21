@@ -1,6 +1,5 @@
 use super::super::can_command::CanCommand;
 use super::super::fault_reports::{ BmsFaultReport, MotorControllerFaultReport };
-use crate::pod_states::PodState;
 use super::super::ack_nack::AckNack;
 use byteorder::{ LittleEndian, ByteOrder };
 

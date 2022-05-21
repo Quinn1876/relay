@@ -5,7 +5,6 @@
  * and if twice that period is missed then a notification is sent.
  * */
 
-
 use std::sync::mpsc::Sender;
 use std::convert::TryInto;
 
@@ -15,6 +14,7 @@ use std::time::{
 };
 use chrono::NaiveDateTime;
 
+#[allow(non_camel_case_types)]
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 pub enum Device {
   BMS,

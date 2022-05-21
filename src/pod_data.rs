@@ -69,6 +69,88 @@ impl Into<JsonValue> for PodData {
     }
 }
 
+impl From<JsonValue> for PodData {
+    fn from(jv: JsonValue) -> PodData {
+        let mut pod_data = PodData::new();
+        for (key, value) in jv.entries() {
+            match key {
+                "battery_pack_current" => {
+                    pod_data.battery_pack_current = value.as_f32();
+                },
+                "average_cell_temperature" => {
+                    pod_data.average_cell_temperature = value.as_f32();
+                },
+                "igbt_temp" => {
+                    pod_data.igbt_temp = value.as_f32();
+                },
+                "motor_voltage" => {
+                    pod_data.motor_voltage = value.as_f32();
+                },
+                "battery_pack_voltage" => {
+                    pod_data.battery_pack_voltage = value.as_f32();
+                },
+                "state_of_charge" => {
+                    pod_data.state_of_charge = value.as_f32();
+                },
+                "buck_temperature" => {
+                    pod_data.buck_temperature = value.as_f32();
+                },
+                "bms_current" => {
+                    pod_data.bms_current = value.as_f32();
+                },
+                "link_cap_voltage" => {
+                    pod_data.link_cap_voltage = value.as_f32();
+                },
+                "mc_pod_speed" => {
+                    pod_data.mc_pod_speed = value.as_f32();
+                },
+                "motor_current" => {
+                    pod_data.motor_current = value.as_f32();
+                },
+                "battery_current" => {
+                    pod_data.battery_current = value.as_f32();
+                },
+                "battery_voltage" => {
+                    pod_data.battery_voltage = value.as_f32();
+                },
+                "speed" => {
+                    pod_data.speed = value.as_f32();
+                },
+                "current_5v" => {
+                    pod_data.current_5v = value.as_f32();
+                },
+                "current_12v" => {
+                    pod_data.current_12v = value.as_f32();
+                },
+                "current_24v" => {
+                    pod_data.current_24v = value.as_f32();
+                },
+                "torchic_1" => {
+                    let v: Vec<Option<f32>> = value.members().map(|x| x.as_f32()).collect();
+                    if v.len() != 2 { continue }
+                    pod_data.torchic_1 = [*v.get(0).unwrap(), *v.get(1).unwrap()];
+                },
+                "torchic_2" => {
+                    let v: Vec<Option<f32>> = value.members().map(|x| x.as_f32()).collect();
+                    if v.len() != 2 { continue }
+                    pod_data.torchic_2 = [*v.get(0).unwrap(), *v.get(1).unwrap()];
+                },
+                "pressure_high" => {
+                    pod_data.pressure_high = value.as_f32();
+                },
+                "pressure_low_1" => {
+                    pod_data.pressure_low_1 = value.as_f32();
+                },
+                "pressure_low_2" => {
+                    pod_data.pressure_low_2 = value.as_f32();
+                },
+                _ => {}
+            }
+        }
+        pod_data
+    }
+}
+
 impl PodData {
     pub fn new() -> PodData {
         PodData {
