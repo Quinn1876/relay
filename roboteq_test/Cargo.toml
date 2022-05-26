@@ -1,21 +1,12 @@
 [package]
-name = "relay"
+name = "roboteq_test"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[workspace]
-members = [
-  "canota",
-  "canota-sys",
-  "roboteq_test"
-]
-
 [dependencies]
-json = "0.12.4"
-chrono = "0.4.19"
-byteorder = "1.4.3"
+relay = { path = ".." }
 
 [target.'cfg(unix)'.dependencies]
 socketcan = { version = "1.7.0" }

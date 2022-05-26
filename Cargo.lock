@@ -153,6 +153,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "roboteq_test"
+version = "0.1.0"
+dependencies = [
+ "relay",
+ "socketcan",
+]
+
+[[package]]
 name = "socketcan"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

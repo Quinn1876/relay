@@ -178,4 +178,23 @@ impl PodData {
             pressure_low_2: None,
         }
     }
+
+    /**
+     * @brief ok()
+     * Check if the board data is okay
+     * !! Important. This function uses unsafe code to unwrap Options. This is okay so long as the none check short circuits the execution path when there is no data
+     * !! IT IS UNDEFINED BEHAVIOUR TO NOT CHECK NONE BEFORE Calling the unsafe blocks
+     */
+    pub fn ok(&self) -> bool {
+        (self.battery_pack_current.is_none() || unsafe { self.battery_pack_current.unwrap_unchecked() < 50.0})
+    &&  (self.average_cell_temperature.is_none() || unsafe { self.average_cell_temperature.unwrap_unchecked() < 45.0 && self.average_cell_temperature.unwrap_unchecked() > 10.0 })
+    &&  (self.igbt_temp.is_none() || unsafe { self.igbt_temp.unwrap_unchecked() < 125.0 && self.igbt_temp.unwrap_unchecked() > -40.0 })
+    &&  (self.motor_voltage.is_none() || unsafe { self.motor_voltage.unwrap_unchecked() < 37.0 && self.motor_voltage.unwrap_unchecked() > 28.0 })
+    &&  (self.battery_pack_voltage.is_none() || unsafe { self.battery_pack_voltage.unwrap_unchecked() > 43.0 })
+    &&  (self.state_of_charge.is_none() || unsafe { self.state_of_charge.unwrap_unchecked() > 10.0 })
+    &&  (self.buck_temperature.is_none() || true) // We will be using an off the shelf buck because Elekid does not provide enough current. It will monitor the temp itself.__rust_force_expr!
+    &&  (self.bms_current.is_none() || unsafe {self.bms_current.unwrap_unchecked() < 0.05 }) // 50 miliamps
+    &&  (self.link_cap_voltage.is_none()) // !! NO MC RIGHT NOW!!!
+    // &   (self.)
+    }
 }
