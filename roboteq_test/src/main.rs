@@ -8,7 +8,7 @@ fn main() {
     let socket = CANSocket::open("can0").unwrap();
     loop {
         socket.set_motor_throttle(node_id, max_motors, throttle_percent).expect("To Send the message");
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
     println!("Hello, world!");
 }
