@@ -25,6 +25,7 @@ pub enum CanCommand {
     PressureHigh(f32),
     PressureLow1(f32),
     PressureLow2(f32),
+    PressureStateChange(AckNack),
     Torchic1([Option<f32>; 2]),
     Torchic2([Option<f32>; 2]),
     Current5V(f32),

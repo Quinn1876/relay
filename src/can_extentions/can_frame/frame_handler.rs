@@ -34,6 +34,7 @@ impl FrameHandler for socketcan::CANFrame {
             0x020 => CanCommand::PressureHigh(parse_first_float(data)),
             0x021 => CanCommand::PressureLow1(parse_first_float(data)),
             0x022 => CanCommand::PressureLow2(parse_first_float(data)),
+            0x023 => CanCommand::PressureStateChange(get_state_change_ack(data)),
             0x030 => CanCommand::Current5V(parse_first_float(data)),
             0x031 => CanCommand::Current12V(parse_first_float(data)),
             0x032 => CanCommand::Current24V(parse_first_float(data)),

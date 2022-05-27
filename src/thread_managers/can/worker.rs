@@ -112,6 +112,14 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
                     _ => panic!("Received A NACK FROM MotorController State Change. Don't know what to do!")
                 }
             },
+            CanCommand::PressureStateChange(ack_nack) => {
+                match ack_nack {
+                    AckNack::Ack => {
+                        self.board_state.set_pressure_state(&self.requested_pod_state);
+                    }
+                    _ => panic!("Received A NACK FROM MotorController State Change. Don't know what to do!")
+                }
+            }
             _ => {}
         }
         self.worker_sender.send(WorkerMessage::CanFrameAndTimeStamp(frame, chrono::Utc::now().naive_local())).expect("Unable to send message from CAN Thread on Worker Channel");
@@ -122,6 +130,7 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
 
     // Check for Transition Complete
     if *self.board_state.get_bms_state() == self.requested_pod_state
+    && *self.board_state.get_pressure_state() == self.requested_pod_state
     // && *self.board_state.get_motor_controller_state() == self.requested_pod_state // NO MOTOR CONTROLLER
     && self.requested_pod_state != self.current_pod_state {
         println!("Sending Ack to UDP for state change");
