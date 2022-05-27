@@ -294,6 +294,9 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Connected> {
                         panic!("UDP THREAD: Failed to Read DesktopStateMessage in UDP Handler while in Connected State");
                     }
                     self.timeout_counter = 0;
+                } else {
+                    // !! ERROR CASE
+                    self.can_message_sender.send(CanMessage::ChangeState(PodState::SystemFailure)).unwrap();
                 }
             },
             Err(error) => {

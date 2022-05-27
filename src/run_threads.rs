@@ -174,7 +174,11 @@ pub fn run_threads<A: std::net::ToSocketAddrs +std::fmt::Debug + Send + 'static>
                             }
                             if new_data {
                                 // println!("NEW DATA Parsed: {:?}", pod_data);
-                                udp_message_sender.send(UDPMessage::TelemetryDataAvailable(pod_data, time)).expect("To be able to send telemetry data to udp from worker");
+                                if pod_data.ok() {
+                                    udp_message_sender.send(UDPMessage::TelemetryDataAvailable(pod_data, time)).expect("To be able to send telemetry data to udp from worker");
+                                } else {
+                                    udp_message_sender.send(UDPMessage::SystemFault).expect("TO BE ABLE TO SEND MESSAGE");
+                                }
                             }
                         }
                     }
