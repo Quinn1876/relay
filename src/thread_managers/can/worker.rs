@@ -4,7 +4,8 @@ use super::super::main_loop::*;
 use crate::board_states::{BoardStates};
 use crate::pod_states::PodState;
 use std::sync::mpsc::{ Receiver, Sender };
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::convert::TryInto;
 use socketcan::ShouldRetry;
 use crate::can_extentions::prelude::*;
 use crate::can_extentions::ack_nack::AckNack;
@@ -20,6 +21,7 @@ pub struct CanWorker<State = Startup> {
     requested_pod_state: PodState,
     current_pod_state: PodState,
     board_state: BoardStates,
+    last_send: Instant,
     state: std::marker::PhantomData<State>
 }
 
@@ -45,6 +47,7 @@ impl CanWorker {
             requested_pod_state: PodState::LowVoltage,
             current_pod_state: PodState::LowVoltage,
             board_state: BoardStates::default(),
+            last_send: Instant::now(),
             state: std::marker::PhantomData
         }
     }
@@ -119,7 +122,7 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
 
     // Check for Transition Complete
     if *self.board_state.get_bms_state() == self.requested_pod_state
-    && *self.board_state.get_motor_controller_state() == self.requested_pod_state
+    // && *self.board_state.get_motor_controller_state() == self.requested_pod_state // NO MOTOR CONTROLLER
     && self.requested_pod_state != self.current_pod_state {
         println!("Sending Ack to UDP for state change");
         self.current_pod_state = self.requested_pod_state;
@@ -144,12 +147,29 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
         }
     }
 
-    let message_result = self.can_handle.send_pod_state(&self.requested_pod_state);
+    if self.last_send.elapsed().as_millis() >= 200 {
+        self.last_send = Instant::now();
+        let message_result = self.can_handle.send_pod_state(&self.requested_pod_state);
 
-    match message_result {
-        Ok(()) => {},
-        Err(err) => {
-            println!("Error Sending Message on CAN bus: {:?}",  err);
+        match message_result {
+            Ok(()) => {},
+            Err(err) => {
+                println!("Error Sending Message on CAN bus: {:?}",  err);
+            }
+        }
+
+        if self.current_pod_state == self.requested_pod_state && self.current_pod_state == PodState::AutoPilot {
+            let node_id = 0;
+            let max_motors = 1;
+            let throttle_percent = 100;
+            let message_result = self.can_handle.set_motor_throttle(node_id, max_motors, throttle_percent);
+
+            match message_result {
+                Ok(()) => {},
+                Err(err) => {
+                    println!("Error Sending Message on CAN bus: {:?}",  err);
+                }
+            }
         }
     }
     CanWorkerState::Disconnected(self)

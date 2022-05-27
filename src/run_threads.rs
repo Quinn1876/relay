@@ -80,7 +80,7 @@ pub fn run_threads<A: std::net::ToSocketAddrs +std::fmt::Debug + Send + 'static>
     #[cfg(unix)]
     {
         let mut pod_data = crate::pod_data::PodData::new();
-        let mut watchdog = crate::device_watchdog::DeviceWatchdogMap::with_all_devices(can_message_sender.clone(), CANMessage::DeviceLost, 200);
+        let mut watchdog = crate::device_watchdog::DeviceWatchdogMap::with_all_devices(can_message_sender.clone(), CANMessage::DeviceLost, 400);
         loop {
             match worker_message_receiver.recv() {
                 Ok(message) => {
@@ -157,6 +157,7 @@ pub fn run_threads<A: std::net::ToSocketAddrs +std::fmt::Debug + Send + 'static>
                                     watchdog.update_device_timestamp(Device::ELEKID, crate::device_watchdog::get_now());
                                 },
                                 CanCommand::Torchic1(data) => {
+                                    println!("TORCHIC1 DATA: {:?}", data);
                                     pod_data.torchic_1 = data;
                                     watchdog.update_device_timestamp(Device::TORCHIC_1, crate::device_watchdog::get_now());
                                 },
