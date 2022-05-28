@@ -7,6 +7,6 @@ edition = "2021"
 
 [dependencies]
 relay = { path = ".." }
-
+termion = "1.5.5"
 [target.'cfg(unix)'.dependencies]
 socketcan = { version = "1.7.0" }
