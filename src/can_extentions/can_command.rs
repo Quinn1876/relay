@@ -31,5 +31,8 @@ pub enum CanCommand {
     Current5V(f32),
     Current12V(f32),
     Current24V(f32),
+    RoboteqTemperatureResult{ sub_index: u8, temp: i8},
+    RoboteqBatteryAmpsResult{ motor_number: u8, amps: i16},
+    RoboteqMotorEncoderResult{ motor_number: u8, speed: i32},
     Unknown(u32), // Arbitration ID provided for debugging Purposes
 }

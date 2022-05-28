@@ -165,6 +165,30 @@ pub fn run_threads<A: std::net::ToSocketAddrs +std::fmt::Debug + Send + 'static>
                                     pod_data.torchic_2 = data;
                                     watchdog.update_device_timestamp(Device::TORCHIC_2, crate::device_watchdog::get_now());
                                 },
+                                CanCommand::RoboteqBatteryAmpsResult{ motor_number, amps } => {
+                                    if motor_number == 1 {
+                                        pod_data.roboteq_motor_1_battery_amps = Some(amps);
+                                    } else if motor_number == 2 {
+                                        pod_data.roboteq_motor_1_battery_amps = Some(amps);
+                                    } else {
+                                        new_data = false;
+                                    }
+                                },
+                                CanCommand::RoboteqMotorEncoderResult{ motor_number, speed } => {
+                                    match motor_number {
+                                        1 => { pod_data.roboteq_motor_1_speed = Some(speed); },
+                                        2 => { pod_data.roboteq_motor_2_speed = Some(speed);},
+                                        _ => { new_data = false; }
+                                    }
+                                },
+                                CanCommand::RoboteqTemperatureResult{ sub_index, temp } => {
+                                    match sub_index {
+                                        1 => { pod_data.roboteq_mcu_temp = Some(temp);},
+                                        2 => { pod_data.roboteq_sensor_1_temp = Some(temp); },
+                                        3 => { pod_data.roboteq_sensor_2_temp = Some(temp); },
+                                        _ => { new_data = false; },
+                                    }
+                                }
                                 _ => {
                                     new_data = false;
                                 }

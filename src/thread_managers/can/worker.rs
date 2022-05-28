@@ -167,8 +167,46 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
             }
         }
 
+        /* ROBOT EQ Data queries */
+        let message_result = self.can_handle.roboteq_read_battery_amps(1, 1);
+        match message_result {
+            Ok(()) => {},
+            Err(err) => {
+                println!("Error Sending Message on CAN bus: {:?}",  err);
+            }
+        }
+        let message_result = self.can_handle.roboteq_read_battery_amps(1, 2);
+        match message_result {
+            Ok(()) => {},
+            Err(err) => {
+                println!("Error Sending Message on CAN bus: {:?}",  err);
+            }
+        }
+        let message_result = self.can_handle.roboteq_read_encoder_motor_speed(1, 1);
+        match message_result {
+            Ok(()) => {},
+            Err(err) => {
+                println!("Error Sending Message on CAN bus: {:?}",  err);
+            }
+        }
+        let message_result = self.can_handle.roboteq_read_encoder_motor_speed(1, 2);
+        match message_result {
+            Ok(()) => {},
+            Err(err) => {
+                println!("Error Sending Message on CAN bus: {:?}",  err);
+            }
+        }
+        let message_result = self.can_handle.roboteq_read_temps(1);
+        match message_result {
+            Ok(()) => {},
+            Err(err) => {
+                println!("Error Sending Message on CAN bus: {:?}",  err);
+            }
+        }
+
+        /* SEND GO MESSAGE TO ROBOTEQ */
         if self.current_pod_state == self.requested_pod_state && self.current_pod_state == PodState::AutoPilot {
-            let node_id = 0;
+            let node_id = 1;
             let max_motors = 1;
             let throttle_percent = 100;
             let message_result = self.can_handle.set_motor_throttle(node_id, max_motors, throttle_percent);
@@ -180,6 +218,19 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
                 }
             }
         }
+
+        /* TURN OFF ROBOTEQ with EBREAK */
+        if self.requested_pod_state == PodState::SystemFailure {
+            let message_result = self.can_handle.roboteq_emergency_stop(1);
+            match message_result {
+                Ok(()) => {},
+                Err(err) => {
+                    println!("Error Sending Message on CAN bus: {:?}",  err);
+                }
+            }
+        }
+
+
     }
     CanWorkerState::Disconnected(self)
  }

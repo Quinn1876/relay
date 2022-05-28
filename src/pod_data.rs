@@ -28,6 +28,15 @@ pub struct PodData {
     pub pressure_high: Float1,
     pub pressure_low_1: Float1,
     pub pressure_low_2: Float1,
+    pub roboteq_motor_1_speed: Option<i32>,
+    pub roboteq_motor_2_speed: Option<i32>,
+    pub roboteq_motor_1_battery_amps: Option<i16>,
+    pub roboteq_motor_2_battery_amps: Option<i16>,
+    pub roboteq_mcu_temp: Option<i8>,
+    pub roboteq_sensor_1_temp: Option<i8>,
+    pub roboteq_sensor_2_temp: Option<i8>,
+
+
 }
 
 trait JsonHelper {
@@ -65,6 +74,13 @@ impl Into<JsonValue> for PodData {
             pressure_high: self.pressure_high,
             pressure_low_1: self.pressure_low_1,
             pressure_low_2: self.pressure_low_2,
+            roboteq_motor_1_speed: self.roboteq_motor_1_speed,
+            roboteq_motor_2_speed: self.roboteq_motor_2_speed,
+            roboteq_motor_1_battery_amps: self.roboteq_motor_1_battery_amps,
+            roboteq_motor_2_battery_amps: self.roboteq_motor_2_battery_amps,
+            roboteq_mcu_temp: self.roboteq_mcu_temp,
+            roboteq_sensor_1_temp: self.roboteq_sensor_1_temp,
+            roboteq_sensor_2_temp: self.roboteq_sensor_2_temp,
         }
     }
 }
@@ -176,6 +192,13 @@ impl PodData {
             pressure_high: None,
             pressure_low_1: None,
             pressure_low_2: None,
+            roboteq_motor_1_speed: None,
+            roboteq_motor_2_speed: None,
+            roboteq_motor_1_battery_amps: None,
+            roboteq_motor_2_battery_amps: None,
+            roboteq_mcu_temp: None,
+            roboteq_sensor_1_temp: None,
+            roboteq_sensor_2_temp: None,
         }
     }
 

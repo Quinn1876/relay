@@ -13,6 +13,8 @@ pub trait FrameHandler {
     fn get_command(&self) -> CanCommand;
 }
 
+const ROBOTEQ_MSG_CSS: u8 = 0b11110000;
+
 impl FrameHandler for socketcan::CANFrame {
     fn get_command(&self) -> CanCommand {
         let id = self.id();
@@ -40,6 +42,37 @@ impl FrameHandler for socketcan::CANFrame {
             0x032 => CanCommand::Current24V(parse_first_float(data)),
             0x040 => CanCommand::Torchic1([Some(parse_first_float(data)), Some(parse_second_float(data))]),
             0x041 => CanCommand::Torchic2([Some(parse_first_float(data)), Some(parse_second_float(data))]),
+            0x581 => {
+                /* ROBOTEQ HANDLER */
+                let flags = data[0];
+                let index = (data[1] as u16) << 8 | (data[2] as u16);
+                let subindex = data[3];
+                match (flags | ROBOTEQ_MSG_CSS) >> 4 {
+                    0x4 => {
+                        match index {
+                            0x2103 => CanCommand::RoboteqMotorEncoderResult{
+                                motor_number: subindex,
+                                speed: (((data[4] as u32) << 24) | ((data[5] as u32) << 16) | ((data[6] as u32) << 8) | (data[7] as u32)) as i32
+                            },
+                            0x210C => CanCommand::RoboteqBatteryAmpsResult{
+                                motor_number: subindex,
+                                amps: (((data[4] as u32) << 8) | ((data[5] as u32))) as i16
+                            },
+                            0x210f => CanCommand::RoboteqTemperatureResult{
+                                sub_index: subindex,
+                                temp: data[4] as i8
+                            },
+                            _ => CanCommand::Unknown(id)
+                        }
+                    },
+                    0x6 => CanCommand::Unknown(id),
+                    0x8 => {
+                        println!("Message Error Roboteq: index:{:?}, subindex:{:?}", index, subindex);
+                        return CanCommand::Unknown(id);
+                    }
+                    _ => CanCommand::Unknown(id)
+                }
+            }
             id => CanCommand::Unknown(id)
         }
     }
