@@ -137,7 +137,7 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
         self.current_pod_state = self.requested_pod_state;
         self.udp_sender.send(UDPMessage::PodStateChangeAck).expect("unable to message UDP thread");
     } else {
-        println!("CURRENT {:?}, BMS: {:?}, MC: {:?}, REQUESTED: {:?}", self.current_pod_state, self.board_state.get_bms_state(), self.board_state.get_motor_controller_state(), self.requested_pod_state);
+        println!("CURRENT {:?}, BMS: {:?}, PYSDUCK: {:?}, REQUESTED: {:?}", self.current_pod_state, self.board_state.get_bms_state(), self.board_state.get_pressure_state()(), self.requested_pod_state);
     }
 
     // check for state message from udp or timeout from worker
