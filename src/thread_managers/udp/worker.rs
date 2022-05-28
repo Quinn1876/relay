@@ -371,6 +371,7 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Recovery> {
                     self.trigger_transition_to_new_state(PodState::LowVoltage)
                 }
             },
+            PodState::SystemFailure => {},
             state => {
                 println!("Pod state mising in recovery procedure: {:?}", state);
             }
