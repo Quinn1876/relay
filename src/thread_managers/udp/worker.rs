@@ -220,6 +220,7 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Disconnected> {
 impl MainLoop<UdpWorkerState> for UdpWorker<Connected> {
     fn main_loop(mut self) -> UdpWorkerState {
         // Check for new Messages from other threads
+        println!("UDP THREAD MAINLOOP RUNNING FOR CONNECTED");
         if let Ok(message) = self.udp_message_receiver.try_recv() {
             match message {
                 UDPMessage::PodStateChangeAck => {
