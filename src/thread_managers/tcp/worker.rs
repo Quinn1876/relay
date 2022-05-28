@@ -175,7 +175,7 @@ impl TcpWorker<Disconnected> {
                         println!("Connection Attempt received");
                         addr.set_port(8081);
                         self.udp_message_sender.send(UDPMessage::ConnectToDesktop(addr)).expect("Should be able to send Message to UDP Socket from TCP Socket");
-                        stream.write_message(b"OK 8081 8080")?;
+                        stream.write_message(b"OK 8090 8080")?;
                     },
                     RequestTypes::Disconnect => {
                         println!("TCP HANDLER: Received a disconnect request while not connected");
