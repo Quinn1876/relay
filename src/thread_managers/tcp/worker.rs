@@ -173,7 +173,7 @@ impl TcpWorker<Disconnected> {
                 match value {
                     RequestTypes::Connect => {
                         println!("Connection Attempt received");
-                        addr.set_port(8081);
+                        addr.set_port(8090);
                         self.udp_message_sender.send(UDPMessage::ConnectToDesktop(addr)).expect("Should be able to send Message to UDP Socket from TCP Socket");
                         stream.write_message(b"OK 8090 8080")?;
                     },
