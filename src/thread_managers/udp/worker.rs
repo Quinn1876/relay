@@ -52,7 +52,7 @@ impl UdpWorker<Connected> {
         };
         match self.udp_socket.send_pod_state_message(&pod_state_message) {
             Ok(bytes_sent) => {
-                // println!("UDP THREAD: Sent {} to Desktop", bytes_sent);
+                println!("UDP THREAD: Sent {} to Desktop", bytes_sent);
             },
             Err(error) => {
                 println!("Error Sending Message on UDP Thread: {:?}", error);
