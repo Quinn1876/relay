@@ -156,7 +156,7 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
         }
     }
 
-    if self.last_send.elapsed().as_millis() >= 200 {
+    if self.last_send.elapsed().as_millis() >= 400 {
         self.last_send = Instant::now();
         let message_result = self.can_handle.send_pod_state(&self.requested_pod_state);
 
