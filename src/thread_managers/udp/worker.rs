@@ -297,6 +297,7 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Connected> {
                     self.timeout_counter = 0;
                 } else {
                     // !! ERROR CASE
+                    println!("UDP ERROR STATE");
                     self.can_message_sender.send(CanMessage::ChangeState(PodState::SystemFailure)).unwrap();
                 }
             },
