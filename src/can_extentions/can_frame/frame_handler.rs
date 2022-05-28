@@ -85,7 +85,7 @@ impl FrameHandler for socketcan::CANFrame {
  */
 fn get_state_change_ack(data: &[u8]) -> AckNack {
     if data.len() == 0 { AckNack::UNKNOWN }
-    else { AckNack::from(data[0]) }
+    else { AckNack::from(data[1]) }
 }
 
 /**
