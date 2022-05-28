@@ -205,33 +205,31 @@ impl PodData {
     /**
      * @brief ok()
      * Check if the board data is okay
-     * !! Important. This function uses unsafe code to unwrap Options. This is okay so long as the none check short circuits the execution path when there is no data
-     * !! IT IS UNDEFINED BEHAVIOUR TO NOT CHECK NONE BEFORE Calling the unsafe blocks
      */
     pub fn ok(&self) -> bool {
-        (self.battery_pack_current.is_none() || unsafe { self.battery_pack_current.unwrap_unchecked() < 50.0})
-    &&  (self.average_cell_temperature.is_none() || unsafe { self.average_cell_temperature.unwrap_unchecked() < 45.0 && self.average_cell_temperature.unwrap_unchecked() > 10.0 })
-    &&  (self.igbt_temp.is_none() || unsafe { self.igbt_temp.unwrap_unchecked() < 125.0 && self.igbt_temp.unwrap_unchecked() > -40.0 })
-    &&  (self.motor_voltage.is_none() || unsafe { self.motor_voltage.unwrap_unchecked() < 37.0 && self.motor_voltage.unwrap_unchecked() > 28.0 })
-    &&  (self.battery_pack_voltage.is_none() || unsafe { self.battery_pack_voltage.unwrap_unchecked() > 43.0 })
-    &&  (self.state_of_charge.is_none() || unsafe { self.state_of_charge.unwrap_unchecked() > 10.0 })
+        (self.battery_pack_current.is_none() ||  { self.battery_pack_current.unwrap() < 50.0})
+    &&  (self.average_cell_temperature.is_none() ||  { self.average_cell_temperature.unwrap() < 45.0 && self.average_cell_temperature.unwrap() > 10.0 })
+    &&  (self.igbt_temp.is_none() ||  { self.igbt_temp.unwrap() < 125.0 && self.igbt_temp.unwrap() > -40.0 })
+    &&  (self.motor_voltage.is_none() ||  { self.motor_voltage.unwrap() < 37.0 && self.motor_voltage.unwrap() > 28.0 })
+    &&  (self.battery_pack_voltage.is_none() ||  { self.battery_pack_voltage.unwrap() > 43.0 })
+    &&  (self.state_of_charge.is_none() ||  { self.state_of_charge.unwrap() > 10.0 })
     &&  (self.buck_temperature.is_none() || true) // We will be using an off the shelf buck because Elekid does not provide enough current. It will monitor the temp itself.__rust_force_expr!
-    &&  (self.bms_current.is_none() || unsafe {self.bms_current.unwrap_unchecked() < 0.05 }) // 50 miliamps
+    &&  (self.bms_current.is_none() ||  {self.bms_current.unwrap() < 0.05 }) // 50 miliamps
     &&  (self.link_cap_voltage.is_none()) // !! NO MC RIGHT NOW!!!
     &&  (self.mc_pod_speed.is_none()) // !! NO MC RIGHT NOW !!
     &&  (self.motor_current.is_none()) // !! NO MC RIGHT NOW
     &&  (self.battery_current.is_none()) // !! NO MC RIGHT NOW
     &&  (self.battery_voltage.is_none()) // !! NO MC RIGHT NOW
-    &&  (self.speed.is_none() || unsafe { self.speed.unwrap_unchecked() >= -1.0 && self.speed.unwrap_unchecked() < 44.0})
+    &&  (self.speed.is_none() ||  { self.speed.unwrap() >= -1.0 && self.speed.unwrap() < 44.0})
     &&  (self.current_5v.is_none()) // OFF THE SHELF BUCK. IF WE NEED TO BE CHECKING THIS, IT WILL BE UPDATED
     &&  (self.current_12v.is_none()) // OFF THE SHELF BUCK. IF WE NEED TO BE CHECKING THIS, IT WILL BE UPDATED
     &&  (self.current_24v.is_none()) // OFF THE SHELF BUCK. IF WE NEED TO BE CHECKING THIS, IT WILL BE UPDATED
-    &&  (self.torchic_1[0].is_none() || unsafe { self.torchic_1[0].unwrap_unchecked() < 100.0})
-    &&  (self.torchic_1[1].is_none() || unsafe { self.torchic_1[1].unwrap_unchecked() < 100.0})
-    &&  (self.torchic_2[0].is_none() || unsafe { self.torchic_2[0].unwrap_unchecked() < 100.0})
-    &&  (self.torchic_2[1].is_none() || unsafe { self.torchic_2[1].unwrap_unchecked() < 100.0})
-    &&  (self.pressure_high.is_none() || unsafe { self.pressure_high.unwrap_unchecked() < 400.0 })
-    &&  (self.pressure_low_1.is_none() || unsafe { self.pressure_low_1.unwrap_unchecked() < 100.0 })
-    &&  (self.pressure_low_2.is_none() || unsafe { self.pressure_low_2.unwrap_unchecked() < 100.0 })
+    &&  (self.torchic_1[0].is_none() ||  { self.torchic_1[0].unwrap() < 100.0})
+    &&  (self.torchic_1[1].is_none() ||  { self.torchic_1[1].unwrap() < 100.0})
+    &&  (self.torchic_2[0].is_none() ||  { self.torchic_2[0].unwrap() < 100.0})
+    &&  (self.torchic_2[1].is_none() ||  { self.torchic_2[1].unwrap() < 100.0})
+    &&  (self.pressure_high.is_none() ||  { self.pressure_high.unwrap() < 400.0 })
+    &&  (self.pressure_low_1.is_none() ||  { self.pressure_low_1.unwrap() < 100.0 })
+    &&  (self.pressure_low_2.is_none() ||  { self.pressure_low_2.unwrap() < 100.0 })
     }
 }
