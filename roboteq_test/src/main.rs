@@ -33,7 +33,8 @@ fn main() {
     loop {
         {
             let throttle_percent = throttle_percent.lock().unwrap();
-            socket.set_motor_throttle(node_id, max_motors, *throttle_percent).expect("To Send the message");
+            socket.set_motor_throttle(node_id, 1, *throttle_percent).expect("To Send the message");
+            socket.set_motor_throttle(node_id, 2, *throttle_percent).expect("To Send the message");
             println!("Throttle percent {:?}\n\r", throttle_percent);
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
