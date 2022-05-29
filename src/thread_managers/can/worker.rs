@@ -214,7 +214,15 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
             let node_id = 1;
             let max_motors = 1;
             let throttle_percent = 100;
-            let message_result = self.can_handle.set_motor_throttle(node_id, max_motors, throttle_percent);
+            let message_result = self.can_handle.set_motor_throttle(node_id, 1, throttle_percent);
+
+            match message_result {
+                Ok(()) => {},
+                Err(err) => {
+                    println!("Error Sending Message on CAN bus: {:?}",  err);
+                }
+            }
+            let message_result = self.can_handle.set_motor_throttle(node_id, 2, throttle_percent);
 
             match message_result {
                 Ok(()) => {},
