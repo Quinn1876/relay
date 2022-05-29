@@ -1,23 +1,26 @@
 #[allow(unused_doc_comments)]
 
 use std::time::Duration;
-use std::sync::{
+use std::{sync::{
     mpsc::{
         channel,
         Receiver,
         Sender
     }
-};
+}, convert::TryInto};
+use std::fs::OpenOptions;
+use std::io::prelude::*;
 
 #[cfg(unix)]
 use crate::can_extentions::prelude::*;
 
-use crate::thread_managers::messages::{
+use crate::{thread_managers::messages::{
     TcpMessage,
     UDPMessage,
     CanMessage as CANMessage,
     WorkerMessage
-};
+}, utils::rpm_integrator, pod_data::{ PodData }};
+use json::JsonValue;
 use crate::thread_managers;
 use crate::error::Error;
 
@@ -25,6 +28,8 @@ use crate::device_watchdog::{
     DeviceWatchdogMapFuncs,
     Device
 };
+
+use crate::utils::rpm_integrator::RpmIntegrator;
 
 pub fn run_threads<A: std::net::ToSocketAddrs +std::fmt::Debug + Send + 'static>(config: crate::config::Config<A>) -> Result<(), Error> {
     let (udp_message_sender, udp_message_receiver): (Sender<UDPMessage>, Receiver<UDPMessage>) = channel();
@@ -75,12 +80,29 @@ pub fn run_threads<A: std::net::ToSocketAddrs +std::fmt::Debug + Send + 'static>
 
     udp_message_sender.send(UDPMessage::StartupComplete).expect("To be able to complete startup");
 
+    let (send_data_to_logger, data_logger_receiver) = channel::<PodData>();
+    std::thread::spawn(move || {
+        let mut out_file = OpenOptions::new()
+            .write(true)
+            .append(true)
+            .open("Logs.txt")
+            .unwrap();
+        loop {
+            if let Ok(data) = data_logger_receiver.recv() {
+                let jv: JsonValue = data.into();
+                out_file.write(&jv.dump().as_bytes()).unwrap();
+            }
+        }
+    });
+
+
     // Worker Thread
     // Initialization
     #[cfg(unix)]
     {
         let mut pod_data = crate::pod_data::PodData::new();
         let mut watchdog = crate::device_watchdog::DeviceWatchdogMap::with_all_devices(can_message_sender.clone(), CANMessage::DeviceLost, 400);
+        let mut rpm_integrator = RpmIntegrator::default();
         loop {
             match worker_message_receiver.recv() {
                 Ok(message) => {
@@ -176,8 +198,8 @@ pub fn run_threads<A: std::net::ToSocketAddrs +std::fmt::Debug + Send + 'static>
                                 },
                                 CanCommand::RoboteqMotorEncoderResult{ motor_number, speed } => {
                                     match motor_number {
-                                        1 => { pod_data.roboteq_motor_1_speed = Some(speed); },
-                                        2 => { pod_data.roboteq_motor_2_speed = Some(speed);},
+                                        1 => { pod_data.roboteq_motor_1_speed = Some(RpmIntegrator::calc_speed(speed)); },
+                                        2 => { pod_data.roboteq_motor_2_speed = Some(RpmIntegrator::calc_speed(speed));},
                                         _ => { new_data = false; }
                                     }
                                 },
@@ -200,6 +222,7 @@ pub fn run_threads<A: std::net::ToSocketAddrs +std::fmt::Debug + Send + 'static>
                             if new_data {
                                 // println!("NEW DATA Parsed: {:?}", pod_data);
                                 if pod_data.ok() {
+                                    send_data_to_logger.send(pod_data.clone()).unwrap();
                                     udp_message_sender.send(UDPMessage::TelemetryDataAvailable(pod_data, time)).expect("To be able to send telemetry data to udp from worker");
                                 } else {
                                     //udp_message_sender.send(UDPMessage::SystemFault).expect("TO BE ABLE TO SEND MESSAGE");

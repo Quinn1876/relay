@@ -152,6 +152,11 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
             CanMessage::DeviceLost => {
                 self.requested_pod_state = PodState::SystemFailure;
                 self.udp_sender.send(UDPMessage::SystemFault).unwrap();
+            },
+            CanMessage::BrakingTimerTimeout => {
+                if self.current_pod_state == PodState::AutoPilot {
+                    self.requested_pod_state = PodState::Braking;
+                }
             }
         }
     }

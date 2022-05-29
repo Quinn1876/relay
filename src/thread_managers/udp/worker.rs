@@ -225,6 +225,15 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Connected> {
             match message {
                 UDPMessage::PodStateChangeAck => {
                     self.current_pod_state = self.next_pod_state;
+                    if self.current_pod_state == PodState::AutoPilot {
+                        {
+                            let can_sender = self.can_message_sender.clone();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(Duration::from_secs(80));
+                                can_sender.send(CanMessage::BrakingTimerTimeout)
+                            });
+                        }
+                    }
                 },
                 UDPMessage::TelemetryDataAvailable(new_data, timestamp) => {
                     // println!("UDP Data Received: {}", timestamp);

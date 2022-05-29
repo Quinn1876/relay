@@ -28,6 +28,7 @@ pub enum UDPMessage {
 #[derive(Clone)]
 pub enum CanMessage {
     ChangeState(pod_states::PodState),
+    BrakingTimerTimeout,
     DeviceLost
 }
 
