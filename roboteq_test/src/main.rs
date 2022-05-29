@@ -21,8 +21,8 @@ fn main() {
         for c in stdin.keys() {
             let mut throttle_percent = throttle_percent_2.lock().unwrap();
             match c.unwrap() {
-                Key::Up => { *throttle_percent += 1 },
-                Key::Down => { *throttle_percent -= 1 }
+                Key::Up => { *throttle_percent += 10 },
+                Key::Down => { *throttle_percent -= 10 }
                 Key::Ctrl('c') => { panic!(); }
                 _ => {}
             }
