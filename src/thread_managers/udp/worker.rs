@@ -229,7 +229,7 @@ impl MainLoop<UdpWorkerState> for UdpWorker<Connected> {
                         {
                             let can_sender = self.can_message_sender.clone();
                             std::thread::spawn(move || {
-                                std::thread::sleep(Duration::from_secs(80));
+                                std::thread::sleep(Duration::from_secs(800));
                                 can_sender.send(CanMessage::BrakingTimerTimeout)
                             });
                         }
