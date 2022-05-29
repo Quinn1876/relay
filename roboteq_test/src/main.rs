@@ -8,7 +8,7 @@ use termion::raw::IntoRawMode;
 
 fn main() {
     let throttle_percent = Arc::new(Mutex::new(0));
-    let node_id = 0;
+    let node_id = 1;
     let max_motors = 1;
     let mut stdout = std::io::stdout().into_raw_mode();
     // let throttle_percent = 100;
