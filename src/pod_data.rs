@@ -28,6 +28,15 @@ pub struct PodData {
     pub pressure_high: Float1,
     pub pressure_low_1: Float1,
     pub pressure_low_2: Float1,
+    pub roboteq_motor_1_speed: Option<f64>,
+    pub roboteq_motor_2_speed: Option<f64>,
+    pub roboteq_motor_1_battery_amps: Option<i16>,
+    pub roboteq_motor_2_battery_amps: Option<i16>,
+    pub roboteq_mcu_temp: Option<i8>,
+    pub roboteq_sensor_1_temp: Option<i8>,
+    pub roboteq_sensor_2_temp: Option<i8>,
+
+
 }
 
 trait JsonHelper {
@@ -65,7 +74,96 @@ impl Into<JsonValue> for PodData {
             pressure_high: self.pressure_high,
             pressure_low_1: self.pressure_low_1,
             pressure_low_2: self.pressure_low_2,
+            roboteq_motor_1_speed: self.roboteq_motor_1_speed,
+            roboteq_motor_2_speed: self.roboteq_motor_2_speed,
+            roboteq_motor_1_battery_amps: self.roboteq_motor_1_battery_amps,
+            roboteq_motor_2_battery_amps: self.roboteq_motor_2_battery_amps,
+            roboteq_mcu_temp: self.roboteq_mcu_temp,
+            roboteq_sensor_1_temp: self.roboteq_sensor_1_temp,
+            roboteq_sensor_2_temp: self.roboteq_sensor_2_temp,
         }
+    }
+}
+
+impl From<JsonValue> for PodData {
+    fn from(jv: JsonValue) -> PodData {
+        let mut pod_data = PodData::new();
+        for (key, value) in jv.entries() {
+            match key {
+                "battery_pack_current" => {
+                    pod_data.battery_pack_current = value.as_f32();
+                },
+                "average_cell_temperature" => {
+                    pod_data.average_cell_temperature = value.as_f32();
+                },
+                "igbt_temp" => {
+                    pod_data.igbt_temp = value.as_f32();
+                },
+                "motor_voltage" => {
+                    pod_data.motor_voltage = value.as_f32();
+                },
+                "battery_pack_voltage" => {
+                    pod_data.battery_pack_voltage = value.as_f32();
+                },
+                "state_of_charge" => {
+                    pod_data.state_of_charge = value.as_f32();
+                },
+                "buck_temperature" => {
+                    pod_data.buck_temperature = value.as_f32();
+                },
+                "bms_current" => {
+                    pod_data.bms_current = value.as_f32();
+                },
+                "link_cap_voltage" => {
+                    pod_data.link_cap_voltage = value.as_f32();
+                },
+                "mc_pod_speed" => {
+                    pod_data.mc_pod_speed = value.as_f32();
+                },
+                "motor_current" => {
+                    pod_data.motor_current = value.as_f32();
+                },
+                "battery_current" => {
+                    pod_data.battery_current = value.as_f32();
+                },
+                "battery_voltage" => {
+                    pod_data.battery_voltage = value.as_f32();
+                },
+                "speed" => {
+                    pod_data.speed = value.as_f32();
+                },
+                "current_5v" => {
+                    pod_data.current_5v = value.as_f32();
+                },
+                "current_12v" => {
+                    pod_data.current_12v = value.as_f32();
+                },
+                "current_24v" => {
+                    pod_data.current_24v = value.as_f32();
+                },
+                "torchic_1" => {
+                    let v: Vec<Option<f32>> = value.members().map(|x| x.as_f32()).collect();
+                    if v.len() != 2 { continue }
+                    pod_data.torchic_1 = [*v.get(0).unwrap(), *v.get(1).unwrap()];
+                },
+                "torchic_2" => {
+                    let v: Vec<Option<f32>> = value.members().map(|x| x.as_f32()).collect();
+                    if v.len() != 2 { continue }
+                    pod_data.torchic_2 = [*v.get(0).unwrap(), *v.get(1).unwrap()];
+                },
+                "pressure_high" => {
+                    pod_data.pressure_high = value.as_f32();
+                },
+                "pressure_low_1" => {
+                    pod_data.pressure_low_1 = value.as_f32();
+                },
+                "pressure_low_2" => {
+                    pod_data.pressure_low_2 = value.as_f32();
+                },
+                _ => {}
+            }
+        }
+        pod_data
     }
 }
 
@@ -94,6 +192,44 @@ impl PodData {
             pressure_high: None,
             pressure_low_1: None,
             pressure_low_2: None,
+            roboteq_motor_1_speed: None,
+            roboteq_motor_2_speed: None,
+            roboteq_motor_1_battery_amps: None,
+            roboteq_motor_2_battery_amps: None,
+            roboteq_mcu_temp: None,
+            roboteq_sensor_1_temp: None,
+            roboteq_sensor_2_temp: None,
         }
+    }
+
+    /**
+     * @brief ok()
+     * Check if the board data is okay
+     */
+    pub fn ok(&self) -> bool {
+        (self.battery_pack_current.is_none() ||  { self.battery_pack_current.unwrap() < 50.0})
+    &&  (self.average_cell_temperature.is_none() ||  { self.average_cell_temperature.unwrap() < 45.0 && self.average_cell_temperature.unwrap() > 10.0 })
+    &&  (self.igbt_temp.is_none() ||  { self.igbt_temp.unwrap() < 125.0 && self.igbt_temp.unwrap() > -40.0 })
+    &&  (self.motor_voltage.is_none() ||  { self.motor_voltage.unwrap() < 37.0 && self.motor_voltage.unwrap() > 28.0 })
+    &&  (self.battery_pack_voltage.is_none() ||  { self.battery_pack_voltage.unwrap() > 43.0 })
+    &&  (self.state_of_charge.is_none() ||  { self.state_of_charge.unwrap() > 10.0 })
+    &&  (self.buck_temperature.is_none() || true) // We will be using an off the shelf buck because Elekid does not provide enough current. It will monitor the temp itself.__rust_force_expr!
+    &&  (self.bms_current.is_none() ||  {self.bms_current.unwrap() < 0.05 }) // 50 miliamps
+    &&  (self.link_cap_voltage.is_none()) // !! NO MC RIGHT NOW!!!
+    &&  (self.mc_pod_speed.is_none()) // !! NO MC RIGHT NOW !!
+    &&  (self.motor_current.is_none()) // !! NO MC RIGHT NOW
+    &&  (self.battery_current.is_none()) // !! NO MC RIGHT NOW
+    &&  (self.battery_voltage.is_none()) // !! NO MC RIGHT NOW
+    &&  (self.speed.is_none() ||  { self.speed.unwrap() >= -1.0 && self.speed.unwrap() < 44.0})
+    &&  (self.current_5v.is_none()) // OFF THE SHELF BUCK. IF WE NEED TO BE CHECKING THIS, IT WILL BE UPDATED
+    &&  (self.current_12v.is_none()) // OFF THE SHELF BUCK. IF WE NEED TO BE CHECKING THIS, IT WILL BE UPDATED
+    &&  (self.current_24v.is_none()) // OFF THE SHELF BUCK. IF WE NEED TO BE CHECKING THIS, IT WILL BE UPDATED
+    &&  (self.torchic_1[0].is_none() ||  { self.torchic_1[0].unwrap() < 100.0})
+    &&  (self.torchic_1[1].is_none() ||  { self.torchic_1[1].unwrap() < 100.0})
+    &&  (self.torchic_2[0].is_none() ||  { self.torchic_2[0].unwrap() < 100.0})
+    &&  (self.torchic_2[1].is_none() ||  { self.torchic_2[1].unwrap() < 100.0})
+    &&  (self.pressure_high.is_none() ||  { self.pressure_high.unwrap() < 400.0 })
+    &&  (self.pressure_low_1.is_none() ||  { self.pressure_low_1.unwrap() < 100.0 })
+    &&  (self.pressure_low_2.is_none() ||  { self.pressure_low_2.unwrap() < 100.0 })
     }
 }

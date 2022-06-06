@@ -25,10 +25,14 @@ pub enum CanCommand {
     PressureHigh(f32),
     PressureLow1(f32),
     PressureLow2(f32),
+    PressureStateChange(AckNack),
     Torchic1([Option<f32>; 2]),
     Torchic2([Option<f32>; 2]),
     Current5V(f32),
     Current12V(f32),
     Current24V(f32),
+    RoboteqTemperatureResult{ sub_index: u8, temp: i8},
+    RoboteqBatteryAmpsResult{ motor_number: u8, amps: i16},
+    RoboteqMotorEncoderResult{ motor_number: u8, speed: i32},
     Unknown(u32), // Arbitration ID provided for debugging Purposes
 }

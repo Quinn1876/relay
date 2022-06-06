@@ -9,9 +9,10 @@ pub mod run_threads;
 #[cfg(unix)]
 pub mod can_extentions;
 
-mod utils;
+pub mod utils;
 pub use utils::stream_utils;
 pub use utils::requests;
+pub use utils::device_watchdog;
 pub mod project_butterfree;
 pub mod pod_states;
 pub mod board_states;

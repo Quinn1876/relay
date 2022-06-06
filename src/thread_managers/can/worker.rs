@@ -2,8 +2,10 @@ use super::super::worker_states::*;
 use super::super::messages::*;
 use super::super::main_loop::*;
 use crate::board_states::{BoardStates};
+use crate::pod_states::PodState;
 use std::sync::mpsc::{ Receiver, Sender };
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::convert::TryInto;
 use socketcan::ShouldRetry;
 use crate::can_extentions::prelude::*;
 use crate::can_extentions::ack_nack::AckNack;
@@ -16,9 +18,10 @@ pub struct CanWorker<State = Startup> {
     udp_sender: Sender<UDPMessage>,
     worker_sender: Sender<WorkerMessage>,
     can_receiver: Receiver<CanMessage>,
-    requested_pod_state: crate::pod_states::PodState,
-    current_pod_state: crate::pod_states::PodState,
+    requested_pod_state: PodState,
+    current_pod_state: PodState,
     board_state: BoardStates,
+    last_send: Instant,
     state: std::marker::PhantomData<State>
 }
 
@@ -30,7 +33,6 @@ pub struct CanWorkerInitializer {
     pub can_socket_read_timeout: Duration
 }
 
-// TODO This file is WIP
 impl CanWorker {
     pub fn new(
         initializer: CanWorkerInitializer
@@ -42,9 +44,10 @@ impl CanWorker {
             udp_sender: initializer.udp_message_sender,
             worker_sender: initializer.worker_message_sender,
             can_receiver: initializer.can_message_receiver,
-            requested_pod_state: crate::pod_states::PodState::LowVoltage,
-            current_pod_state: crate::pod_states::PodState::LowVoltage,
+            requested_pod_state: PodState::LowVoltage,
+            current_pod_state: PodState::LowVoltage,
             board_state: BoardStates::default(),
+            last_send: Instant::now(),
             state: std::marker::PhantomData
         }
     }
@@ -109,6 +112,14 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
                     _ => panic!("Received A NACK FROM MotorController State Change. Don't know what to do!")
                 }
             },
+            CanCommand::PressureStateChange(ack_nack) => {
+                match ack_nack {
+                    AckNack::Ack => {
+                        self.board_state.set_pressure_state(&self.requested_pod_state);
+                    }
+                    _ => panic!("Received A NACK FROM MotorController State Change. Don't know what to do!")
+                }
+            }
             _ => {}
         }
         self.worker_sender.send(WorkerMessage::CanFrameAndTimeStamp(frame, chrono::Utc::now().naive_local())).expect("Unable to send message from CAN Thread on Worker Channel");
@@ -118,32 +129,121 @@ impl MainLoop<CanWorkerState> for CanWorker<Disconnected> {
     }
 
     // Check for Transition Complete
-    if *self.board_state.get_bms_state() == self.requested_pod_state 
-    && *self.board_state.get_motor_controller_state() == self.requested_pod_state
+    if *self.board_state.get_bms_state() == self.requested_pod_state
+    && *self.board_state.get_pressure_state() == self.requested_pod_state
+    // && *self.board_state.get_motor_controller_state() == self.requested_pod_state // NO MOTOR CONTROLLER
     && self.requested_pod_state != self.current_pod_state {
         println!("Sending Ack to UDP for state change");
         self.current_pod_state = self.requested_pod_state;
         self.udp_sender.send(UDPMessage::PodStateChangeAck).expect("unable to message UDP thread");
     } else {
-        println!("CURRENT {:?}, BMS: {:?}, MC: {:?}, REQUESTED: {:?}", self.current_pod_state, self.board_state.get_bms_state(), self.board_state.get_motor_controller_state(), self.requested_pod_state);
+        println!("CURRENT {:?}, BMS: {:?}, PYSDUCK: {:?}, REQUESTED: {:?}", self.current_pod_state, self.board_state.get_bms_state(), self.board_state.get_pressure_state(), self.requested_pod_state);
     }
 
-    // check for state message from udp
+    // check for state message from udp or timeout from worker
     if let Ok(message) = self.can_receiver.try_recv() {
         match message {
             CanMessage::ChangeState(new_state) => {
-                self.requested_pod_state = new_state;
+                /* This check is just for safety. Since we deal with multiple workers, there could be race conditions. If DeviceLost is received, that needs to be the final state. */
+                if self.requested_pod_state != PodState::SystemFailure {
+                    self.requested_pod_state = new_state;
+                }
+            }
+            CanMessage::DeviceLost => {
+                self.requested_pod_state = PodState::SystemFailure;
+                self.udp_sender.send(UDPMessage::SystemFault).unwrap();
+            },
+            CanMessage::BrakingTimerTimeout => {
+                if self.current_pod_state == PodState::AutoPilot {
+                    self.requested_pod_state = PodState::Braking;
+                }
             }
         }
     }
 
-    let message_result = self.can_handle.send_pod_state(&self.requested_pod_state);
+    if self.last_send.elapsed().as_millis() >= 400 {
+        self.last_send = Instant::now();
+        let message_result = self.can_handle.send_pod_state(&self.requested_pod_state);
 
-    match message_result {
-        Ok(()) => {},
-        Err(err) => {
-            println!("Error Sending Message on CAN bus: {:?}",  err);
+        match message_result {
+            Ok(()) => {},
+            Err(err) => {
+                println!("Error Sending Message on CAN bus: {:?}",  err);
+            }
         }
+
+        /* ROBOT EQ Data queries */
+        let message_result = self.can_handle.roboteq_read_battery_amps(1, 1);
+        match message_result {
+            Ok(()) => {},
+            Err(err) => {
+                println!("Error Sending Message on CAN bus: {:?}",  err);
+            }
+        }
+        let message_result = self.can_handle.roboteq_read_battery_amps(1, 2);
+        match message_result {
+            Ok(()) => {},
+            Err(err) => {
+                println!("Error Sending Message on CAN bus: {:?}",  err);
+            }
+        }
+        let message_result = self.can_handle.roboteq_read_encoder_motor_speed(1, 1);
+        match message_result {
+            Ok(()) => {},
+            Err(err) => {
+                println!("Error Sending Message on CAN bus: {:?}",  err);
+            }
+        }
+        let message_result = self.can_handle.roboteq_read_encoder_motor_speed(1, 2);
+        match message_result {
+            Ok(()) => {},
+            Err(err) => {
+                println!("Error Sending Message on CAN bus: {:?}",  err);
+            }
+        }
+        let message_result = self.can_handle.roboteq_read_temps(1);
+        match message_result {
+            Ok(()) => {},
+            Err(err) => {
+                println!("Error Sending Message on CAN bus: {:?}",  err);
+            }
+        }
+
+        /* SEND GO MESSAGE TO ROBOTEQ */
+        if self.current_pod_state == self.requested_pod_state && self.current_pod_state == PodState::AutoPilot {
+            let node_id = 1;
+            let max_motors = 1;
+            let throttle_percent = 100;
+            let message_result = self.can_handle.set_motor_throttle(node_id, 1, throttle_percent);
+
+            match message_result {
+                Ok(()) => {},
+                Err(err) => {
+                    println!("Error Sending Message on CAN bus: {:?}",  err);
+                }
+            }
+            let message_result = self.can_handle.set_motor_throttle(node_id, 2, throttle_percent);
+
+            match message_result {
+                Ok(()) => {},
+                Err(err) => {
+                    println!("Error Sending Message on CAN bus: {:?}",  err);
+                }
+            }
+        }
+
+        /* TURN OFF ROBOTEQ with EBREAK */
+        if self.requested_pod_state == PodState::SystemFailure {
+            let message_result = self.can_handle.roboteq_emergency_stop(1);
+            match message_result {
+                Ok(()) => {},
+                Err(err) => {
+                    println!("Error Sending Message on CAN bus: {:?}",  err);
+                }
+            }
+        }
+
+
     }
     CanWorkerState::Disconnected(self)
  }

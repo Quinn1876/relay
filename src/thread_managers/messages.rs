@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use socketcan::CANFrame;
 use crate::{
     pod_data,
-    pod_states
+    pod_states,
 };
 
 pub enum TcpMessage {
@@ -21,11 +21,15 @@ pub enum UDPMessage {
     #[allow(dead_code)] // Not Dead, only constructed when running in unix, but the udp socket needs to be able to check it in all cases
     PodStateChangeAck,
     #[allow(dead_code)]
-    TelemetryDataAvailable(pod_data::PodData, chrono::NaiveDateTime)
+    TelemetryDataAvailable(pod_data::PodData, chrono::NaiveDateTime),
+    SystemFault
 }
 
+#[derive(Clone)]
 pub enum CanMessage {
-    ChangeState(pod_states::PodState)
+    ChangeState(pod_states::PodState),
+    BrakingTimerTimeout,
+    DeviceLost
 }
 
 pub enum WorkerMessage {

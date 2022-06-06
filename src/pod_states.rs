@@ -109,7 +109,7 @@ impl PodState {
      * @brief validates state transitions
      */
     pub fn can_transition_to(&self, new_state: &PodState) -> bool {
-        match self {
+        (match self {
             PodState::Resting => matches!(new_state, PodState::LowVoltage),
             PodState::LowVoltage =>  matches!(new_state, PodState::Resting | PodState::Armed),
             PodState::Armed => matches!(new_state, PodState::LowVoltage | PodState::AutoPilot | PodState::EmergencyBrake),
@@ -122,7 +122,7 @@ impl PodState {
             PodState::AtSpeed => false,
             PodState::Decelerating => false,
             PodState::Invalid => false
-        }
+        }) || *new_state == PodState::SystemFailure
     }
 
     pub fn is_error_state(&self) -> bool {
