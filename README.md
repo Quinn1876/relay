@@ -10,7 +10,7 @@ For the purposes of testing the connection with the desktop, you can run the rel
 The canota-sys crate provides bindings to a C library which is used for ota flashing through the CAN bus.
 The bindings are generated and stored in the repository. After they are generated, some manual work is needed
 to clean up the generated bindings. This includes adding some markers for functions which indicate errors in the form of boolean values. Outside of the markers, the C library is provided as is with unsafe functions. For a safe wrapper api, see the `canota` crate.s
-
+cargo run
 # Crate: canota
 The goal of the canota crate is to provide a safe, application ready implementation of the canota-sys library.
 
@@ -31,7 +31,7 @@ Once bindgen is installed, run `make generate-bindings-canota` to generate the b
 - `cargo build` : Builds a binary or library crate without running it if it is a binary crate. Useful for checking if code will compile
 - `cargo test` : Builds and runs the tests for a crate
 - `cargo doc --open` : Generates docs for the crate that this is called in.
-
+- `cargo run -- -ci vcan0`: Attach the relay to the virtual CAN bus.
 
 # References that were helpful building this repository
 
