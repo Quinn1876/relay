@@ -207,6 +207,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "socketcan",
+ "virtual_can_device",
 ]
 
 [[package]]

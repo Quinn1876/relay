@@ -1,9 +1,9 @@
 /**
  * @Trait RelayCanSocket
- * @brief A CANSocket extention which implements methods 
+ * @brief A CANSocket extention which implements methods
  * that allow for sending messages as defined in:
  * https://docs.google.com/document/d/1pAAAPyWClxrq7MwrA0_AGxnqU6B5r5MHmvRERMY6hUo/edit
- * 
+ *
  * @authors Quinn Hodges
  */
 

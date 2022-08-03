@@ -80,7 +80,8 @@ impl FrameHandler for socketcan::CANFrame {
 
 /**
  * @func:  get_state_change_data
- * @brief: A State change CAN frame will be a single byte which represents
+ * @brief: A State change CAN frame will be 2 bytes
+ * The state Id and
  * An ack or a Nack of the state change request
  */
 fn get_state_change_ack(data: &[u8]) -> AckNack {
