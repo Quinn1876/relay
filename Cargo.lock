@@ -87,6 +87,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "flatbuffers"
+version = "2.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86b428b715fdbdd1c364b84573b5fdc0f84f8e423661b9f398735278bc7f2b6a"
+dependencies = [
+ "bitflags 1.3.2",
+ "smallvec",
+ "thiserror",
+]
+
+[[package]]
 name = "hex"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -208,6 +219,7 @@ dependencies = [
  "serde_json",
  "socketcan",
  "virtual_can_device",
+ "wloop_flatc",
 ]
 
 [[package]]
@@ -257,6 +269,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "smallvec"
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fd0db749597d91ff862fd1d55ea87f7855a744a8425a64695b6fca237d1dad1"
+
+[[package]]
 name = "socketcan"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -296,6 +314,26 @@ dependencies = [
 name = "text_io"
 version = "0.1.9"
 source = "git+https://github.com/Quinn1876/rust-si?branch=Fix-Multiple-Read-Error#dad65d85008aa2706ad61ee6de21d17798e61293"
+
+[[package]]
+name = "thiserror"
+version = "1.0.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5f6586b7f764adc0231f4c79be7b920e766bb2f3e51b3661cdb263828f19994"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12bafc5b54507e0149cdf1b145a5d80ab80a90bcd9275df43d4fff68460f6c21"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "time"
@@ -357,3 +395,10 @@ name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
+
+[[package]]
+name = "wloop_flatc"
+version = "0.1.0"
+dependencies = [
+ "flatbuffers",
+]

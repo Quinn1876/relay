@@ -5,3 +5,6 @@
 [submodule "CAN-Device-Sim"]
 	path = CAN-Device-Sim
 	url = git@github.com:waterloop/CAN-Device-Sim.git
+[submodule "wloop-flatc"]
+	path = wloop-flatc
+	url = git@github.com:waterloop/wloop-flatc.git

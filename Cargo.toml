@@ -21,6 +21,7 @@ serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"
 virtual_can_device = { path = './CAN-Device-Sim' }
+wloop_flatc = {path = './wloop-flatc/rust' }
 
 [target.'cfg(unix)'.dependencies]
 socketcan = { version = "1.7.0" }
