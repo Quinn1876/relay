@@ -7,15 +7,19 @@ use crate:: {
     pod_states::PodState
 };
 use super::{
-    errno::UdpErrno
+    errno::UdpErrno,
+    serializable_date::SerializableDate
 };
+use serde_derive::{ Serialize as DSerialize, Deserialize as DDeserialize };
 
+
+#[derive(DSerialize, DDeserialize)]
 pub struct PodStateMessage {
     current_state: PodState,
     pending_next_state: PodState,
     errno: UdpErrno,
     telemetry: Option<PodData>,
-    telemetry_timestamp: NaiveDateTime,
+    telemetry_timestamp: SerializableDate,
     recovering: bool
 }
 

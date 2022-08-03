@@ -1,4 +1,8 @@
 use std::collections::HashMap;
+use std::fmt;
+use serde::{Serialize, Deserialize};
+use serde::ser::{ Serializer };
+use serde::de::{ self, Visitor, Deserializer };
 
 #[derive(PartialEq, Hash, Eq, Debug, Copy, Clone)]
 pub enum PodState {
@@ -15,6 +19,97 @@ pub enum PodState {
     Decelerating,
     Invalid
     // More to come for manual operation
+}
+
+impl Default for PodState {
+    fn default() -> Self {
+        PodState::Invalid
+    }
+}
+
+struct PodStateVisitor;
+
+impl<'de> Visitor<'de> for PodStateVisitor {
+    type Value = PodState;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("an integer between 0 and 0x0B")
+    }
+
+    fn visit_u8<E>(self, value: u8) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(PodState::from(value))
+    }
+
+    fn visit_i8<E>(self, value: i8) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        if value < 0 {
+            return Err(E::custom(format!("i8 out of range: {}", value)));
+        }
+        Ok(PodState::from(value as u8))
+    }
+
+    fn visit_u32<E>(self, value: u32) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        if value > u32::from(u8::MAX) {
+            return Err(E::custom(format!("u32 out of range: {}", value)));
+        }
+        Ok(PodState::from(value as u8))
+    }
+
+    fn visit_i32<E>(self, value: i32) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        if value < 0 || value > i32::from(u8::MAX) {
+            return Err(E::custom(format!("i32 out of range: {}", value)));
+        }
+        Ok(PodState::from(value as u8))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        if value > u64::from(u8::MAX) {
+            return Err(E::custom(format!("u64 out of range: {}", value)));
+        }
+        Ok(PodState::from(value as u8))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        if value < 0 || value > i64::from(u8::MAX) {
+            return Err(E::custom(format!("i64 out of range: {}", value)));
+        }
+        Ok(PodState::from(value as u8))
+    }
+}
+
+impl Serialize for PodState {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u8(self.to_byte())
+    }
+}
+
+impl<'de> Deserialize<'de> for PodState {
+    fn deserialize<D>(deserializer: D) -> Result<PodState, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(PodStateVisitor)
+    }
 }
 
 mod test {

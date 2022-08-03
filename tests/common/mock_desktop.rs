@@ -10,6 +10,7 @@ use std::net::{
 use relay::pod_states::PodState;
 use relay::pod_data::PodData;
 use relay::utils::device_watchdog::get_now;
+use relay::project_butterfree::udp::errno::UdpErrno;
 use std::thread;
 use std::sync::mpsc::{
   Sender,
@@ -21,10 +22,11 @@ use std::io::{
   Read,
   Write
 };
+use chrono::NaiveDateTime;
 
 pub struct MockDesktop<T: ToSocketAddrs> {
   relay_board_tcp_addr: T,
-  thread_handle: Option<thread::JoinHandle<()>>,
+  udp_thread_handle: Option<thread::JoinHandle<()>>,
   main_thread_sender: Sender<MockDesktopMessage>,
   main_thread_receiver: Receiver<MockDesktopMessage>
 }
@@ -39,7 +41,7 @@ impl<T: ToSocketAddrs> MockDesktop<T> {
     let (main_thread_sender, main_thread_receiver) = channel::<MockDesktopMessage>();
     MockDesktop {
       relay_board_tcp_addr: tcp_ip,
-      thread_handle: None,
+      udp_thread_handle: None,
       main_thread_sender,
       main_thread_receiver
     }
@@ -47,7 +49,7 @@ impl<T: ToSocketAddrs> MockDesktop<T> {
 
   pub fn Connect(&mut self) -> Result<(), Box<dyn Error>> {
     /* Send Connect Request */
-    let tcp_stream = TcpStream::connect(self.relay_board_tcp_addr).unwrap();
+    let mut tcp_stream = TcpStream::connect(&self.relay_board_tcp_addr).unwrap();
     tcp_stream.write("CONNECT\r\n".as_bytes())?;
 
     /* Receive Response  */
@@ -55,7 +57,7 @@ impl<T: ToSocketAddrs> MockDesktop<T> {
     tcp_stream.read_to_string(&mut response)?;
 
     /* Parse Response */
-    let mut response: Vec<&str> = response.split(" ").collect();
+    let response: Vec<&str> = response.split(" ").collect();
     let bind_port = response.get(1).unwrap().parse::<u16>()?;
     let relay_ip = tcp_stream.peer_addr().unwrap().ip();
     let relay_board_port = response.get(2).unwrap().parse::<u16>()?;
@@ -67,16 +69,18 @@ impl<T: ToSocketAddrs> MockDesktop<T> {
 
     /* Set Up IPC Pipelines */
 
-    self.thread_handle = Some(std::thread::Builder::new().name("UDP Thread".to_string()).spawn(move || {
+    self.udp_thread_handle = Some(std::thread::Builder::new().name("UDP Thread".to_string()).spawn(move || {
       let mut timestamp = get_now();
       let mut recv_buf: [u8; 1024] = [0; 1024];
       // udp_socket.
       loop {
-        udp_socket.send(&object!{ "requested_state": PodState::LowVoltage.to_byte(), "most_recent_timestamp": timestamp.timestamp() }.dump().as_bytes());
+        timestamp = get_now();
+        udp_socket.send(&UdpMessage(&PodState::LowVoltage, &timestamp)).expect("To send");
         match udp_socket.recv(&mut recv_buf) {
           Ok(_data_read) => {
             if let Ok(json_data) = json::parse(&String::from_utf8(recv_buf.to_vec()).unwrap()) {
               /* Missing a step here. json_data is not just pod data */
+
               let pod_data = PodData::from(json_data);
 
             } else {
@@ -95,4 +99,9 @@ impl<T: ToSocketAddrs> MockDesktop<T> {
   pub fn Disconnect() {
 
   }
+
+}
+
+fn UdpMessage(requested_state: &PodState, timestamp: &NaiveDateTime) -> Vec<u8> {
+  object!{ "requested_state": requested_state.to_byte(), "most_recent_timestamp": timestamp.timestamp() }.dump().into_bytes()
 }
