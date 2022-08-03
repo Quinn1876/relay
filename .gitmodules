@@ -2,3 +2,6 @@
 [submodule "canbus-canota"]
 	path = canbus-canota
 	url = ../canbus-canota.git
+[submodule "CAN-Device-Sim"]
+	path = CAN-Device-Sim
+	url = git@github.com:waterloop/CAN-Device-Sim.git
