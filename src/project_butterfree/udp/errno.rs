@@ -20,7 +20,8 @@ impl UdpErrno {
             UdpErrno::InvalidTransitionRequest => 0x1,
             UdpErrno::ArmingFault              => 0x2,
             UdpErrno::ControllerTimeout        => 0x3,
-            UdpErrno::GeneralPodFailure        => 0x4
+            UdpErrno::GeneralPodFailure        => 0x4,
+            UdpErrno::UnknownError             => 0x5
         }
     }
 }

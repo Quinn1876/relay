@@ -78,7 +78,7 @@ impl<T: ToSocketAddrs> MockDesktop<T> {
         udp_socket.send(&UdpMessage(&PodState::LowVoltage, &timestamp)).expect("To send");
         match udp_socket.recv(&mut recv_buf) {
           Ok(_data_read) => {
-            if let Ok(json_data) = json::parse(&String::from_utf8(recv_buf.to_vec()).unwrap()) {
+            if let Ok(json_data) = serde_json::from_str(&String::from_utf8(recv_buf.to_vec()).unwrap()) {
               /* Missing a step here. json_data is not just pod data */
 
               let pod_data = PodData::from(json_data);

@@ -9,6 +9,12 @@ use serde::de::{ self, Visitor };
 
 pub struct SerializableDate{ timestamp: NaiveDateTime }
 
+impl SerializableDate {
+  pub fn timestamp(&self) -> i64 {
+    self.timestamp.timestamp()
+  }
+}
+
 impl From<NaiveDateTime> for SerializableDate {
   fn from(dt: NaiveDateTime) -> Self {
     SerializableDate {

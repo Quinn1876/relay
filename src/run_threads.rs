@@ -89,8 +89,7 @@ pub fn run_threads<A: std::net::ToSocketAddrs +std::fmt::Debug + Send + 'static>
             .unwrap();
         loop {
             if let Ok(data) = data_logger_receiver.recv() {
-                let jv: JsonValue = data.into();
-                out_file.write(&jv.dump().as_bytes()).unwrap();
+                out_file.write(&serde_json::to_vec(&data).unwrap()).unwrap();
             }
         }
     });

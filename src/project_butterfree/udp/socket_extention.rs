@@ -8,6 +8,6 @@ pub trait ProjectButterfreeUDPSocket {
 
 impl ProjectButterfreeUDPSocket for UdpSocket {
     fn send_pod_state_message(&self, msg: &PodStateMessage) -> std::io::Result<usize> {
-        self.send(&msg.to_json_bytes())
+        self.send(&serde_json::to_vec(msg)?)
     }
 }
