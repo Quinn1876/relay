@@ -33,6 +33,9 @@ Once bindgen is installed, run `make generate-bindings-canota` to generate the b
 - `cargo doc --open` : Generates docs for the crate that this is called in.
 - `cargo run -- -ci vcan0`: Attach the relay to the virtual CAN bus.
 
+# Running VCAN0
+There are instructions for getting vcan up and running available [here](https://github.com/waterloop/CAN-Device-Sim#getting-up-and-running-with-virtual-can-development) 
+
 # References that were helpful building this repository
 
 [Using C Libraries in Rust](https://medium.com/dwelo-r-d/using-c-libraries-in-rust-13961948c72a)
